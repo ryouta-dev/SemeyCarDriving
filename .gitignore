@@ -8,5 +8,9 @@ Thumbs.db
 *.tmp
 *.log
 
-# Export credentials
+# Export credentials & sensitive data
 export_credentials.cfg
+.env
+*.ps1
+run.json
+jobs.json
