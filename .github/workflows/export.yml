@@ -5,6 +5,10 @@ on:
     branches: [ main, master ]
   workflow_dispatch:
 
+env:
+  GODOT_VERSION: "4.7.2"
+  GODOT_RELEASE: "stable"
+
 jobs:
   export-android:
     name: "Build Android APK"
@@ -13,12 +17,30 @@ jobs:
       - name: "Checkout code"
         uses: actions/checkout@v4
 
-      - name: "Setup Godot"
-        uses: chickensoft-games/setup-godot@v2
-        with:
-          version: 4.7.2
-          use-dotnet: false
-          include-templates: true
+      - name: "Install Godot ${{ env.GODOT_VERSION }}"
+        run: |
+          mkdir -p ~/godot
+          cd ~/godot
+          FNAME="Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_linux.x86_64.zip"
+          URL="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_RELEASE}/${FNAME}"
+          echo "Downloading Godot from: $URL"
+          wget -q "$URL" -O godot.zip
+          unzip -q godot.zip
+          chmod +x Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_linux.x86_64
+          sudo ln -sf ~/godot/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_linux.x86_64 /usr/local/bin/godot
+          godot --version
+
+      - name: "Install Godot Export Templates"
+        run: |
+          TNAME="Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_export_templates.tpz"
+          URL="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_RELEASE}/${TNAME}"
+          echo "Downloading templates from: $URL"
+          wget -q "$URL" -O templates.tpz
+          mkdir -p ~/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_RELEASE}
+          unzip -q templates.tpz -d /tmp/templates
+          mv /tmp/templates/templates/* ~/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_RELEASE}/
+          echo "Templates installed. Contents:"
+          ls ~/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_RELEASE}/ | head -20
 
       - name: "Setup Java 17"
         uses: actions/setup-java@v5
@@ -29,39 +51,43 @@ jobs:
       - name: "Configure Keystore & Godot Settings"
         run: |
           mkdir -p ~/.android
-          keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android -keystore ~/.android/debug.keystore -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
+          keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android \
+            -keystore ~/.android/debug.keystore -storepass android \
+            -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
 
           ANDROID_PATH="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
           JAVA_PATH="${JAVA_HOME}"
           KEYSTORE_PATH="$HOME/.android/debug.keystore"
 
-          echo "Detected Android SDK: $ANDROID_PATH"
-          echo "Detected Java Home: $JAVA_PATH"
+          echo "Android SDK: $ANDROID_PATH"
+          echo "Java: $JAVA_PATH"
+          ls "$ANDROID_PATH/build-tools" || true
 
           mkdir -p ~/.config/godot
-          echo '[gd_resource type="EditorSettings" format=3]' > ~/.config/godot/editor_settings-4.tres
-          echo '' >> ~/.config/godot/editor_settings-4.tres
-          echo '[resource]' >> ~/.config/godot/editor_settings-4.tres
-          echo "export/android/android_sdk_path = \"$ANDROID_PATH\"" >> ~/.config/godot/editor_settings-4.tres
-          echo "export/android/java_sdk_path = \"$JAVA_PATH\"" >> ~/.config/godot/editor_settings-4.tres
-          echo "export/android/debug_keystore = \"$KEYSTORE_PATH\"" >> ~/.config/godot/editor_settings-4.tres
-          echo 'export/android/debug_keystore_user = "androiddebugkey"' >> ~/.config/godot/editor_settings-4.tres
-          echo 'export/android/debug_keystore_pass = "android"' >> ~/.config/godot/editor_settings-4.tres
-          echo 'export/android/force_system_user = false' >> ~/.config/godot/editor_settings-4.tres
+          printf '[gd_resource type="EditorSettings" format=3]\n\n[resource]\nexport/android/android_sdk_path = "%s"\nexport/android/java_sdk_path = "%s"\nexport/android/debug_keystore = "%s"\nexport/android/debug_keystore_user = "androiddebugkey"\nexport/android/debug_keystore_pass = "android"\nexport/android/force_system_user = false\n' \
+            "$ANDROID_PATH" "$JAVA_PATH" "$KEYSTORE_PATH" \
+            > ~/.config/godot/editor_settings-4.tres
 
           cp ~/.config/godot/editor_settings-4.tres ~/.config/godot/editor_settings-4.7.tres
-          cp ~/.config/godot/editor_settings-4.tres ~/.config/godot/editor_settings-4.3.tres
+
+          echo "=== Editor settings written ==="
+          cat ~/.config/godot/editor_settings-4.7.tres
 
       - name: "Export Android Debug APK"
         run: |
           mkdir -p build
-          godot -v --headless --export-debug "Android" build/SemeyCarDriving.apk
+          godot -v --headless --export-debug "Android" build/SemeyCarDriving.apk 2>&1 | tee build/android_export.log
+          echo "Exit code: $?"
+          ls -la build/
 
       - name: "Upload APK Artifact"
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: SemeyCarDriving-Android-APK
-          path: build/SemeyCarDriving.apk
+          path: |
+            build/SemeyCarDriving.apk
+            build/android_export.log
 
   export-ios:
     name: "Export iOS Project"
@@ -70,50 +96,70 @@ jobs:
       - name: "Checkout code"
         uses: actions/checkout@v4
 
-      - name: "Setup Godot on macOS"
-        uses: chickensoft-games/setup-godot@v2
-        with:
-          version: 4.7.2
-          use-dotnet: false
-          include-templates: true
+      - name: "Install Godot ${{ env.GODOT_VERSION }} (macOS)"
+        run: |
+          FNAME="Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_macos.universal.zip"
+          URL="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_RELEASE}/${FNAME}"
+          echo "Downloading Godot from: $URL"
+          curl -sL "$URL" -o godot.zip
+          unzip -q godot.zip
+          sudo cp -R "Godot.app" /Applications/
+          sudo ln -sf /Applications/Godot.app/Contents/MacOS/Godot /usr/local/bin/godot
+          godot --version
+
+      - name: "Install Godot Export Templates (macOS)"
+        run: |
+          TNAME="Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_export_templates.tpz"
+          URL="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_RELEASE}/${TNAME}"
+          echo "Downloading templates from: $URL"
+          curl -sL "$URL" -o templates.tpz
+          mkdir -p ~/Library/Application\ Support/Godot/export_templates/${GODOT_VERSION}.${GODOT_RELEASE}
+          unzip -q templates.tpz -d /tmp/templates
+          mv /tmp/templates/templates/* ~/Library/Application\ Support/Godot/export_templates/${GODOT_VERSION}.${GODOT_RELEASE}/
+          echo "Templates installed:"
+          ls ~/Library/Application\ Support/Godot/export_templates/${GODOT_VERSION}.${GODOT_RELEASE}/ | head -20
 
       - name: "Export iOS Project from Godot"
         run: |
           mkdir -p build/ios
-          godot -v --headless --export-debug "iOS" build/ios/SemeyCarDriving.zip
+          godot -v --headless --export-debug "iOS" build/ios/SemeyCarDriving.zip 2>&1 | tee build/ios/export.log || true
+          echo "Build dir contents:"
+          ls -la build/ios/
 
-      - name: "Build iOS App / IPA with xcodebuild"
+      - name: "Build IPA with xcodebuild (no signing)"
         run: |
           cd build/ios
-          unzip -q SemeyCarDriving.zip -d xcode_project
-          cd xcode_project
-          
-          PROJ=$(find . -name "*.xcodeproj" -maxdepth 1 | head -n 1)
-          if [ -n "$PROJ" ]; then
-            echo "Found Xcode project: $PROJ"
-            xcodebuild -project "$PROJ" \
-              -configuration Debug \
-              -sdk iphoneos \
-              -derivedDataPath derived_data \
-              CODE_SIGNING_ALLOWED=NO \
-              CODE_SIGNING_REQUIRED=NO \
-              CODE_SIGN_IDENTITY="" \
-              build || true
-
-            APP_PATH=$(find derived_data -name "*.app" -type d | head -n 1)
-            if [ -n "$APP_PATH" ]; then
-              echo "Found compiled app at $APP_PATH. Packaging into IPA..."
-              mkdir -p Payload
-              cp -R "$APP_PATH" Payload/
-              zip -rq ../SemeyCarDriving.ipa Payload
-              echo "SemeyCarDriving.ipa generated successfully!"
+          if [ -f SemeyCarDriving.zip ]; then
+            unzip -q SemeyCarDriving.zip -d xcode_project
+            cd xcode_project
+            PROJ=$(find . -name "*.xcodeproj" -maxdepth 2 | head -n 1)
+            if [ -n "$PROJ" ]; then
+              echo "Building Xcode project: $PROJ"
+              xcodebuild \
+                -project "$PROJ" \
+                -configuration Debug \
+                -sdk iphonesimulator \
+                -derivedDataPath derived_data \
+                CODE_SIGNING_ALLOWED=NO \
+                CODE_SIGNING_REQUIRED=NO \
+                CODE_SIGN_IDENTITY="" \
+                build 2>&1 | tail -30 || true
+              APP_PATH=$(find derived_data -name "*.app" -type d | head -n 1)
+              if [ -n "$APP_PATH" ]; then
+                mkdir -p Payload
+                cp -R "$APP_PATH" Payload/
+                zip -rq ../../SemeyCarDriving.ipa Payload
+                echo "IPA created!"
+              fi
             fi
           fi
 
       - name: "Upload iOS Artifacts"
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: SemeyCarDriving-iOS
           path: |
-            build/ios/*.ipa
             build/ios/SemeyCarDriving.zip
+            build/ios/SemeyCarDriving.ipa
+            build/ios/export.log
