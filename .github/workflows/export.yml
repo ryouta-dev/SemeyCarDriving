@@ -157,39 +157,42 @@ jobs:
       - name: "Export iOS Xcode Project"
         run: |
           mkdir -p build/ios
-          echo "=== Starting Godot iOS export ==="
-          godot -v --headless --export-debug "iOS" build/ios/SemeyCarDriving.zip 2>&1 | tee build/ios/export.log || true
-          echo "=== Build dir ==="
+          echo "=== Starting Godot iOS export (Project Only) ==="
+          godot -v --headless --export-debug "iOS" build/ios/SemeyCarDriving.xcodeproj 2>&1 | tee build/ios/export.log
+          echo "=== Build dir contents ==="
           ls -lah build/ios/
 
       - name: "Build IPA with xcodebuild"
         run: |
           cd build/ios
-          if [ ! -f SemeyCarDriving.zip ]; then
-            echo "WARNING: Godot did not produce iOS zip. Check export.log"
-            cat export.log | tail -30
-          else
-            unzip -q SemeyCarDriving.zip -d xcode_project
-            cd xcode_project
-            PROJ=$(find . -name "*.xcodeproj" -maxdepth 2 | head -n 1)
-            if [ -n "$PROJ" ]; then
-              echo "Building for device: $PROJ"
-              xcodebuild \
-                -project "$PROJ" \
-                -configuration Debug \
-                -sdk iphoneos \
-                -destination "generic/platform=iOS" \
-                -derivedDataPath derived_data \
-                CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
-                build 2>&1 | tail -40 || true
-              APP_PATH=$(find derived_data -name "*.app" -type d | head -n 1)
-              if [ -n "$APP_PATH" ]; then
-                echo "Found app at $APP_PATH. Packaging into IPA..."
-                mkdir -p Payload && cp -R "$APP_PATH" Payload/
-                zip -rq ../SemeyCarDriving.ipa Payload
-                echo "IPA created: $(du -sh ../SemeyCarDriving.ipa)"
-              fi
+          echo "=== Searching for Xcode project ==="
+          PROJ=$(find . -name "*.xcodeproj" -maxdepth 2 | head -n 1)
+          if [ -n "$PROJ" ]; then
+            echo "Found Xcode project: $PROJ"
+            echo "Compiling for iOS device (unsigned)..."
+            xcodebuild \
+              -project "$PROJ" \
+              -configuration Debug \
+              -sdk iphoneos \
+              -destination "generic/platform=iOS" \
+              -derivedDataPath derived_data \
+              CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY="" \
+              build 2>&1 | tail -40 || true
+
+            APP_PATH=$(find derived_data -name "*.app" -type d | head -n 1)
+            if [ -n "$APP_PATH" ]; then
+              echo "Found compiled app at: $APP_PATH"
+              echo "Packaging into SemeyCarDriving.ipa..."
+              mkdir -p Payload && cp -R "$APP_PATH" Payload/
+              zip -rq SemeyCarDriving.ipa Payload
+              echo "SUCCESS: IPA created: $(du -sh SemeyCarDriving.ipa)"
+            else
+              echo "WARNING: App bundle not found in derived_data"
             fi
+            # Also create zip archive of Xcode project
+            zip -rq SemeyCarDriving-XcodeProject.zip "$PROJ" SemeyCarDriving SemeyCarDriving.xcframework 2>/dev/null || true
+          else
+            echo "ERROR: Xcode project was not found in build/ios"
           fi
 
       - name: "Upload iOS Artifacts"
@@ -198,6 +201,6 @@ jobs:
         with:
           name: SemeyCarDriving-iOS
           path: |
-            build/ios/SemeyCarDriving.zip
-            build/ios/SemeyCarDriving.ipa
+            build/ios/*.ipa
+            build/ios/*.zip
             build/ios/export.log
