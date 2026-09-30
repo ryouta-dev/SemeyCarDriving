@@ -142,6 +142,18 @@ jobs:
           echo "Templates installed:"
           ls "$TMPL_DIR/" | head -20
 
+      - name: "Configure iOS Team ID"
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          if [ -n "$APPLE_TEAM_ID" ]; then
+            echo "Injecting Apple Team ID: $APPLE_TEAM_ID"
+            sed -i "s/application\/signature=\"[^\"]*\"/application\/signature=\"$APPLE_TEAM_ID\"/" export_presets.cfg
+          else
+            echo "No APPLE_TEAM_ID secret set — using placeholder for CI Xcode project generation"
+          fi
+          grep "application/signature" export_presets.cfg
+
       - name: "Export iOS Xcode Project"
         run: |
           mkdir -p build/ios
