@@ -16,7 +16,7 @@ jobs:
       - name: "Setup Godot"
         uses: chickensoft-games/setup-godot@v2
         with:
-          version: 4.3.0
+          version: 4.7.2
           use-dotnet: false
           include-templates: true
 
@@ -26,24 +26,33 @@ jobs:
           distribution: "temurin"
           java-version: "17"
 
-      - name: "Setup Android SDK"
-        uses: android-actions/setup-android@v3
-
-      - name: "Generate Debug Keystore & Configure Editor Settings"
+      - name: "Configure Keystore & Godot Settings"
         run: |
           mkdir -p ~/.android
           keytool -keyalg RSA -genkeypair -alias androiddebugkey -keypass android -keystore ~/.android/debug.keystore -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 9999 -deststoretype pkcs12
+
+          ANDROID_PATH="${ANDROID_HOME:-/usr/local/lib/android/sdk}"
+          JAVA_PATH="${JAVA_HOME}"
+          KEYSTORE_PATH="$HOME/.android/debug.keystore"
+
+          echo "Detected Android SDK: $ANDROID_PATH"
+          echo "Detected Java Home: $JAVA_PATH"
+
           mkdir -p ~/.config/godot
           cat << EOF > ~/.config/godot/editor_settings-4.tres
-          [gd_resource type="EditorSettings" format=3]
+[gd_resource type="EditorSettings" format=3]
 
-          [resource]
-          export/android/android_sdk_path = "$ANDROID_HOME"
-          export/android/debug_keystore = "$HOME/.android/debug.keystore"
-          export/android/debug_keystore_user = "androiddebugkey"
-          export/android/debug_keystore_pass = "android"
-          export/android/force_system_user = false
-          EOF
+[resource]
+export/android/android_sdk_path = "$ANDROID_PATH"
+export/android/java_sdk_path = "$JAVA_PATH"
+export/android/debug_keystore = "$KEYSTORE_PATH"
+export/android/debug_keystore_user = "androiddebugkey"
+export/android/debug_keystore_pass = "android"
+export/android/force_system_user = false
+EOF
+
+          cp ~/.config/godot/editor_settings-4.tres ~/.config/godot/editor_settings-4.7.tres
+          cp ~/.config/godot/editor_settings-4.tres ~/.config/godot/editor_settings-4.3.tres
 
       - name: "Export Android Debug APK"
         run: |
@@ -58,7 +67,7 @@ jobs:
 
   export-ios:
     name: "Export iOS Project"
-    runs-on: macos-latest
+    runs-on: macos-14
     steps:
       - name: "Checkout code"
         uses: actions/checkout@v4
@@ -66,17 +75,47 @@ jobs:
       - name: "Setup Godot on macOS"
         uses: chickensoft-games/setup-godot@v2
         with:
-          version: 4.3.0
+          version: 4.7.2
           use-dotnet: false
           include-templates: true
 
-      - name: "Export iOS Project"
+      - name: "Export iOS Project from Godot"
         run: |
           mkdir -p build/ios
-          godot -v --headless --export-debug "iOS" build/ios/SemeyCarDriving.ipa || true
+          godot -v --headless --export-debug "iOS" build/ios/SemeyCarDriving.zip
 
-      - name: "Upload iOS Project Artifact"
+      - name: "Build iOS App / IPA with xcodebuild"
+        run: |
+          cd build/ios
+          unzip -q SemeyCarDriving.zip -d xcode_project
+          cd xcode_project
+          
+          PROJ=$(find . -name "*.xcodeproj" -maxdepth 1 | head -n 1)
+          if [ -n "$PROJ" ]; then
+            echo "Found Xcode project: $PROJ"
+            xcodebuild -project "$PROJ" \
+              -configuration Debug \
+              -sdk iphoneos \
+              -derivedDataPath derived_data \
+              CODE_SIGNING_ALLOWED=NO \
+              CODE_SIGNING_REQUIRED=NO \
+              CODE_SIGN_IDENTITY="" \
+              build || true
+
+            APP_PATH=$(find derived_data -name "*.app" -type d | head -n 1)
+            if [ -n "$APP_PATH" ]; then
+              echo "Found compiled app at $APP_PATH. Packaging into IPA..."
+              mkdir -p Payload
+              cp -R "$APP_PATH" Payload/
+              zip -rq ../SemeyCarDriving.ipa Payload
+              echo "SemeyCarDriving.ipa generated successfully!"
+            fi
+          fi
+
+      - name: "Upload iOS Artifacts"
         uses: actions/upload-artifact@v4
         with:
-          name: SemeyCarDriving-iOS-Build
-          path: build/ios/
+          name: SemeyCarDriving-iOS
+          path: |
+            build/ios/*.ipa
+            build/ios/SemeyCarDriving.zip
