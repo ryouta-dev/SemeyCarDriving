@@ -1,0 +1,1264 @@
+class_name PolygonUtils
+extends RefCounted
+
+## Shared polygon geometry utilities for building flat meshes, resolving area colors, etc.
+
+const AREA_COLORS := {
+	"landuse": {
+		"residential": Color(0.7, 0.7, 0.65),
+		"industrial": Color(0.6, 0.55, 0.5),
+		"commercial": Color(0.75, 0.65, 0.6),
+		"farmland": Color(0.55, 0.7, 0.35),
+		"forest": Color(0.2, 0.5, 0.15),
+		"grass": Color(0.4, 0.7, 0.3),
+	},
+	"natural": {
+		"water": Color(0.2, 0.4, 0.8),
+		"wood": Color(0.15, 0.45, 0.1),
+		"scrub": Color(0.4, 0.55, 0.25),
+	},
+	"leisure": {
+		"park": Color(0.35, 0.7, 0.3),
+		"pitch": Color(0.3, 0.65, 0.25),
+		"playground": Color(0.7, 0.6, 0.35),          # sandy/bark playground ground
+	},
+	"tourism": {
+		"camp_site": Color(0.45, 0.65, 0.35),         # grassy camping ground
+		"caravan_site": Color(0.5, 0.62, 0.4),
+		"chalet": Color(0.6, 0.55, 0.45),             # holiday-cabin plot
+	},
+	"playground": {
+		# Playground equipment footprints (climbingframe, structure, etc.) get the
+		# same sandy/bark ground as leisure=playground; unlisted values fall back
+		# to that shared tone below.
+		"climbingframe": Color(0.7, 0.6, 0.35),
+		"structure": Color(0.7, 0.6, 0.35),
+		"sandpit": Color(0.85, 0.78, 0.55),
+	},
+	"amenity": {
+		"parking": Color(0.55, 0.55, 0.55),           # asphalt grey for surface lots
+		"bicycle_parking": Color(0.5, 0.5, 0.55),
+		"motorcycle_parking": Color(0.5, 0.5, 0.55),
+		"school": Color(0.85, 0.78, 0.6),             # warm tan campus ground
+		"university": Color(0.82, 0.75, 0.6),
+		"kindergarten": Color(0.9, 0.82, 0.6),
+		"fire_station": Color(0.7, 0.4, 0.35),        # muted brick red
+		"hospital": Color(0.85, 0.7, 0.7),
+		"college": Color(0.82, 0.75, 0.6),
+	},
+	"shop": {
+		"supermarket": Color(0.7, 0.6, 0.7),
+	},
+	"power": {
+		"generator": Color(0.45, 0.45, 0.5),
+	},
+	"man_made": {
+		"wastewater_plant": Color(0.5, 0.52, 0.55),   # concrete treatment basins
+		"water_works": Color(0.5, 0.52, 0.55),
+		"works": Color(0.55, 0.5, 0.48),              # industrial works ground
+		"reservoir_covered": Color(0.45, 0.5, 0.55),
+		"storage_tank": Color(0.55, 0.55, 0.58),
+		"wastewater": Color(0.5, 0.52, 0.55),
+		"reinforced_slope": Color(0.52, 0.50, 0.46),  # riprap / reinforced embankment
+		"pier": Color(0.62, 0.58, 0.5),               # wooden/concrete pier deck
+		"bunker_silo": Color(0.55, 0.55, 0.55),       # concrete clamp silo
+	},
+	"historic": {
+		"fort": Color(0.45, 0.55, 0.35),              # grassy earthwork ramparts
+		"citadel": Color(0.45, 0.55, 0.35),
+		"castle": Color(0.55, 0.52, 0.48),            # stone footprint
+		"archaeological_site": Color(0.55, 0.50, 0.42),
+	},
+	"area:highway": {
+		"traffic_island": Color(0.6, 0.6, 0.58),
+	},
+}
+
+const DEFAULT_AREA_COLOR := Color(0.3, 0.6, 0.3)
+
+## Resolve an area color from OSM tags. Returns DEFAULT_AREA_COLOR when no match.
+static func get_area_color(tags: Dictionary) -> Color:
+	for category: String in AREA_COLORS:
+		if tags.has(category):
+			var value: String = tags[category]
+			var sub: Dictionary = AREA_COLORS[category]
+			if sub.has(value):
+				return sub[value]
+			return DEFAULT_AREA_COLOR
+	return DEFAULT_AREA_COLOR
+
+## ─── Ground layer ordering (the 3D analogue of Mapnik's layer stack) ─────────
+##
+## Overlapping ground polygons (a grass patch inside a park, a riverbank over a
+## meadow) are coplanar and z-fight when both write depth. We resolve them the
+## way Mapnik/OSM-Carto does — a fixed painter's-algorithm layer order — instead
+## of nudging y-offsets (which never fully stops flicker at grazing angles).
+##
+## The ground meshes disable depth-write (see build_flat_polygon_mesh) so the
+## GPU never fights over near-equal depths; draw order is decided purely by
+## Material.render_priority. This mirrors the road system in
+## RoadMaterialFactory. Values are used as the BASE render_priority; a small
+## area-based tiebreak is added on top (see ground_render_priority) so a smaller
+## patch of the SAME class still paints last.
+##
+## Higher = painted LATER = on top. Broad landcover sits low; water sits above
+## landcover; more specific/human features (pitches, playgrounds, parking,
+## paved surfaces) sit above that. Kept well BELOW the road range (roads start
+## around +1 but on their own depth-disabled layer above all ground) — ground
+## priorities are negative so they never paint over a road.
+const GROUND_LAYER_PRIORITY := {
+	# Broadest landcover — the base carpet everything else sits on.
+	"landuse=forest": -40,
+	"natural=wood": -40,
+	"landuse=farmland": -39,
+	"landuse=meadow": -38,
+	"landuse=grass": -37,
+	"natural=scrub": -37,
+	"landuse=residential": -36,
+	"landuse=commercial": -36,
+	"landuse=industrial": -36,
+	# Parks read as landcover but should sit above bare grass/residential fill.
+	"leisure=park": -34,
+	"leisure=garden": -34,
+	"leisure=nature_reserve": -35,
+	# Water above dry landcover (riverbanks, lakes drawn over meadows).
+	"natural=water": -30,
+	"natural=wetland": -31,
+	"natural=beach": -29,
+	# Specific human-made / recreation surfaces sit on top of the landcover.
+	"leisure=pitch": -20,
+	"leisure=playground": -19,
+	"playground=*": -19,
+	"amenity=school": -22,
+	"amenity=university": -22,
+	"amenity=college": -22,
+	"amenity=hospital": -22,
+	"amenity=parking": -12,
+	"amenity=bicycle_parking": -12,
+	"amenity=motorcycle_parking": -12,
+	"area:highway=*": -10,
+}
+## Fallback for a ground feature not named above (generic closed ring).
+const DEFAULT_GROUND_PRIORITY := -33
+
+## Rank for bare surface=* rings (plazas, courtyards) that carry no landcover
+## tag and so miss GROUND_LAYER_PRIORITY. Sits above generic landcover but below
+## parking/paved-highway, matching where a paved plaza reads in the stack.
+const SURFACE_GROUND_PRIORITY := -14
+
+## Rank for transport platform decks — the topmost ground layer, painted over
+## any surface/landcover it overlays (still below the road layer).
+const PLATFORM_GROUND_PRIORITY := -6
+
+## Sentinel passed to the mesh builders when the caller is NOT a ground layer
+## (roofs, etc.) — the material then keeps default depth-write and priority 0.
+## Chosen outside the ground range so it can never collide with a real rank.
+const GROUND_NO_PRIORITY := 127
+
+## Apply the painter's-algorithm ground layering to a material: disable
+## depth-write and set render_priority so overlapping coplanar ground patches
+## are ordered by paint order (never z-fight). A GROUND_NO_PRIORITY sentinel
+## leaves the material untouched (normal depth writes) for non-ground callers.
+static func _apply_ground_layering(mat: BaseMaterial3D, render_priority: int) -> void:
+	if render_priority == GROUND_NO_PRIORITY:
+		return
+	mat.depth_draw_mode = BaseMaterial3D.DEPTH_DRAW_DISABLED
+	mat.render_priority = clampi(render_priority, -128, 127)
+
+## Priority band width reserved for the smaller-patch tiebreak. The base class
+## value is spaced by 1, so keep the tiebreak strictly inside (0, 1) — a smaller
+## polygon nudges up by at most just under 1 rank, never crossing into the next
+## class. This guarantees CLASS order dominates and AREA only breaks ties within
+## a class (and between adjacent classes only when their bases already touch).
+const _GROUND_TIEBREAK_SPAN := 0.9
+## Reference area (m²) at/above which a polygon gets NO smaller-patch bonus.
+## Anything smaller ramps toward the full tiebreak span as it shrinks.
+const _GROUND_TIEBREAK_REF_AREA := 40000.0  # ~200m x 200m
+
+## Look up the base layer rank for a ground feature's tags. Checks each tagged
+## category for an exact "key=value" entry, then a "key=*" wildcard, matching
+## get_area_color's category precedence (AREA_COLORS key order).
+static func ground_base_priority(tags: Dictionary) -> int:
+	for category: String in AREA_COLORS:
+		if tags.has(category):
+			var value: String = tags[category]
+			var exact := "%s=%s" % [category, value]
+			if GROUND_LAYER_PRIORITY.has(exact):
+				return GROUND_LAYER_PRIORITY[exact]
+			var wild := "%s=*" % category
+			if GROUND_LAYER_PRIORITY.has(wild):
+				return GROUND_LAYER_PRIORITY[wild]
+			return DEFAULT_GROUND_PRIORITY
+	return DEFAULT_GROUND_PRIORITY
+
+## Smaller-patch bonus in [0, _GROUND_TIEBREAK_SPAN): a smaller polygon gets a
+## larger bonus so it paints LAST (on top). Zero/negative area is treated as
+## "tiny" and gets the full span. Exposed on its own so callers with a fixed
+## base rank (e.g. SurfaceHandler) can add the same tiebreak.
+static func ground_tiebreak_bonus(area_xz: float) -> float:
+	if area_xz <= 0.0:
+		return _GROUND_TIEBREAK_SPAN
+	# Smaller area → bonus near _GROUND_TIEBREAK_SPAN; large area → ~0.
+	var t := clampf(area_xz / _GROUND_TIEBREAK_REF_AREA, 0.0, 1.0)
+	return (1.0 - t) * _GROUND_TIEBREAK_SPAN
+
+## Final float render_priority for a ground polygon: the class base rank plus a
+## smaller-patch bonus (ground_tiebreak_bonus). A smaller area_xz ⇒ larger bonus
+## ⇒ painted later ⇒ wins over the bigger polygon it sits inside, which is
+## exactly the requested behaviour ("smaller patches drawn last, always win").
+## Returns a float so callers can assign it verbatim to Material.render_priority
+## (Godot rounds/stores it; the ordering is what matters).
+static func ground_render_priority(tags: Dictionary, area_xz: float) -> float:
+	return float(ground_base_priority(tags)) + ground_tiebreak_bonus(area_xz)
+
+## Collect world positions for a way's node_ids from osm_data.
+static func way_to_points(way_node_ids: Array[int], osm_data_nodes: Dictionary) -> PackedVector3Array:
+	var points: PackedVector3Array = []
+	for nid: int in way_node_ids:
+		if osm_data_nodes.has(nid):
+			points.append(osm_data_nodes[nid].local_pos)
+	return points
+
+## Triangulate a 3D polygon (XZ plane) and return the index array.
+## Returns an empty array when triangulation fails.
+static func triangulate_xz(points: PackedVector3Array) -> PackedInt32Array:
+	var pts_2d: PackedVector2Array = []
+	for p: Vector3 in points:
+		pts_2d.append(Vector2(p.x, p.z))
+	return Geometry2D.triangulate_polygon(pts_2d)
+
+## Build a flat colored MeshInstance3D from a 3D polygon at the given Y height.
+## Returns null when fewer than 3 points or triangulation fails.
+## Build a triangulated flat polygon mesh.
+## When drape_terrain is true, each vertex keeps its own elevation (points[idx].y)
+## and y is added as an offset, so the polygon follows the DEM. When false (the
+## default, used by roofs), every vertex sits at the single height y.
+## render_priority orders overlapping (coplanar) ground polygons in the
+## painter's-algorithm layer stack (see ground_render_priority). When it is set
+## to anything other than GROUND_NO_PRIORITY the material also disables
+## depth-write so overlapping coplanar patches are resolved by paint order
+## instead of z-fighting — the Mapnik model, matching the road system. Roofs
+## and other non-ground callers leave it default and keep normal depth writes.
+static func build_flat_polygon_mesh(
+		points: PackedVector3Array,
+		color: Color,
+		y: float = 0.01,
+		drape_terrain: bool = false,
+		render_priority: int = GROUND_NO_PRIORITY,
+) -> MeshInstance3D:
+	if points.size() < 3:
+		return null
+
+	var indices := triangulate_xz(points)
+	if indices.size() == 0:
+		return null
+
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	_apply_ground_layering(mat, render_priority)
+	st.set_material(mat)
+
+	for i: int in range(indices.size()):
+		var idx: int = indices[i]
+		var vy: float = (points[idx].y + y) if drape_terrain else y
+		st.set_normal(Vector3.UP)
+		st.add_vertex(Vector3(points[idx].x, vy, points[idx].z))
+
+	var mesh_instance := MeshInstance3D.new()
+	mesh_instance.mesh = st.commit()
+	return mesh_instance
+
+## Check if the XZ-projected polygon winds counter-clockwise (shoelace formula).
+static func is_polygon_ccw(points: PackedVector3Array) -> bool:
+	var signed_area := 0.0
+	for i: int in range(points.size() - 1):
+		signed_area += points[i].x * points[i + 1].z - points[i + 1].x * points[i].z
+	return signed_area < 0.0
+
+## Reverse a polygon's vertex order while preserving the closing duplicate vertex
+## at the end (if the input was closed). Used to flip winding direction.
+static func reverse_polygon(points: PackedVector3Array) -> PackedVector3Array:
+	var count := points.size()
+	var closed := count > 1 and points[0].distance_to(points[count - 1]) < 0.01
+	var inner_count := count - 1 if closed else count
+	var result: PackedVector3Array = []
+	for i: int in range(inner_count - 1, -1, -1):
+		result.append(points[i])
+	if closed and result.size() > 0:
+		result.append(result[0])
+	return result
+
+## Return the polygon wound counter-clockwise. OSM ways are authored CW or CCW
+## arbitrarily; downstream geometry that depends on a consistent vertex order
+## (outward wall normals, etc.) should normalize through this single entry point.
+static func normalize_to_ccw(points: PackedVector3Array) -> PackedVector3Array:
+	if is_polygon_ccw(points):
+		return points
+	return reverse_polygon(points)
+
+## Shading normal used by add_tri for triangle (a, b, c): (b - a) x (c - a).
+## NOTE: This is the OPPOSITE sign of Godot's winding-front / culling normal
+## (Plane(a, b, c).normal). Call sites in the building builder choose their
+## vertex winding to make this convention point outward, so it is preserved here.
+static func tri_shading_normal(a: Vector3, b: Vector3, c: Vector3) -> Vector3:
+	return (b - a).cross(c - a)
+
+## Emit a triangle (a -> b -> c) to a SurfaceTool with an auto-computed shading
+## normal (see tri_shading_normal). Degenerate triangles fall back to UP.
+static func add_tri(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3) -> void:
+	var normal := tri_shading_normal(a, b, c)
+	if normal.length_squared() < 0.000001:
+		normal = Vector3.UP
+	else:
+		normal = normal.normalized()
+	st.set_normal(normal)
+	st.add_vertex(a)
+	st.set_normal(normal)
+	st.add_vertex(b)
+	st.set_normal(normal)
+	st.add_vertex(c)
+
+## Emit a quad (a, b, c, d in order) to a SurfaceTool so that its visible front
+## face (per backface culling) points along desired_normal, regardless of the
+## input vertex winding. The shading normal is set explicitly to desired_normal
+## so lighting and culling agree. This is the winding-agnostic path for geometry
+## built from OSM ways whose CW/CCW direction is not known in advance.
+static func add_quad_facing(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, d: Vector3, desired_normal: Vector3) -> void:
+	# Culling uses the winding-front normal Plane(a, b, c).normal == -tri_shading_normal.
+	# Pick the winding whose front face points along desired_normal.
+	var front_normal := -tri_shading_normal(a, b, c)
+	if front_normal.dot(desired_normal) >= 0.0:
+		_add_tri_with_normal(st, a, b, c, desired_normal)
+		_add_tri_with_normal(st, a, c, d, desired_normal)
+	else:
+		_add_tri_with_normal(st, a, c, b, desired_normal)
+		_add_tri_with_normal(st, a, d, c, desired_normal)
+
+## Emit a triangle with an explicit shading normal (used by add_quad_facing so
+## the lit normal matches the requested facing direction rather than the winding).
+static func _add_tri_with_normal(st: SurfaceTool, a: Vector3, b: Vector3, c: Vector3, normal: Vector3) -> void:
+	st.set_normal(normal)
+	st.add_vertex(a)
+	st.set_normal(normal)
+	st.add_vertex(b)
+	st.set_normal(normal)
+	st.add_vertex(c)
+
+## Emit a 4-sided prism ("tube") of half-extent `radius` running from p0 to p1.
+## A cheap stand-in for a cylinder (4 side quads, no end caps) used for thin
+## linear structures like power cables and gantry beams that read fine as a
+## square cross-section from a distance. Faces are emitted outward-facing so the
+## tube is visible from any angle. Degenerate (zero-length) segments are skipped.
+static func add_tube_segment(st: SurfaceTool, p0: Vector3, p1: Vector3, radius: float) -> void:
+	var dir := (p1 - p0)
+	if dir.length_squared() < 0.000001:
+		return
+	dir = dir.normalized()
+	# Pick any axis not parallel to the tube to seed the cross-section frame.
+	var up := Vector3.UP
+	if absf(dir.dot(up)) > 0.99:
+		up = Vector3.FORWARD
+	var side := dir.cross(up).normalized() * radius
+	var vert := dir.cross(side).normalized() * radius
+	var ring0: Array[Vector3] = [p0 + side, p0 + vert, p0 - side, p0 - vert]
+	var ring1: Array[Vector3] = [p1 + side, p1 + vert, p1 - side, p1 - vert]
+	for k: int in range(4):
+		var n := (k + 1) % 4
+		var outward: Vector3 = ((ring0[k] - p0) + (ring1[k] - p1)).normalized()
+		add_quad_facing(st, ring0[k], ring0[n], ring1[n], ring1[k], outward)
+
+## Compute the centroid of a polygon in the XZ plane.
+static func polygon_centroid(points: PackedVector3Array) -> Vector3:
+	var cx := 0.0
+	var cz := 0.0
+	var count := points.size()
+	# Exclude the closing duplicate vertex if present
+	if count > 1 and points[0].distance_to(points[count - 1]) < 0.01:
+		count -= 1
+	if count == 0:
+		return Vector3.ZERO
+	for i: int in range(count):
+		cx += points[i].x
+		cz += points[i].z
+	return Vector3(cx / count, 0.0, cz / count)
+
+## Absolute XZ-plane area of a polygon (shoelace, winding-agnostic). Used to
+## rank overlapping ground patches so the SMALLER one paints on top (see
+## ground_render_priority) — a small grass patch inside a park must win.
+static func polygon_area_xz(points: PackedVector3Array) -> float:
+	var count := points.size()
+	# Exclude the closing duplicate vertex if present.
+	if count > 1 and points[0].distance_to(points[count - 1]) < 0.01:
+		count -= 1
+	if count < 3:
+		return 0.0
+	var signed_area := 0.0
+	for i: int in range(count):
+		var a := points[i]
+		var b := points[(i + 1) % count]
+		signed_area += a.x * b.z - b.x * a.z
+	return absf(signed_area) * 0.5
+
+## Return the AABB min/max in XZ plane as [min_x, max_x, min_z, max_z].
+static func polygon_bounds_xz(points: PackedVector3Array) -> Array[float]:
+	var min_x := INF
+	var max_x := -INF
+	var min_z := INF
+	var max_z := -INF
+	for p: Vector3 in points:
+		min_x = min(min_x, p.x)
+		max_x = max(max_x, p.x)
+		min_z = min(min_z, p.z)
+		max_z = max(max_z, p.z)
+	return [min_x, max_x, min_z, max_z]
+
+## Find the direction along the longest edge of the polygon (XZ plane, normalized).
+static func polygon_longest_edge_dir(points: PackedVector3Array) -> Vector3:
+	var best_len := 0.0
+	var best_dir := Vector3(1, 0, 0)
+	for i: int in range(points.size() - 1):
+		var d := points[i + 1] - points[i]
+		d.y = 0.0
+		var l := d.length()
+		if l > best_len:
+			best_len = l
+			best_dir = d / l
+	return best_dir
+
+## Shrink (inset) a polygon in the XZ plane by a fixed distance.
+## Returns empty array if the polygon degenerates.
+static func shrink_polygon_xz(points: PackedVector3Array, amount: float) -> PackedVector3Array:
+	var pts2d: PackedVector2Array = []
+	var count := points.size()
+	if count > 1 and points[0].distance_to(points[count - 1]) < 0.01:
+		count -= 1
+	for i: int in range(count):
+		pts2d.append(Vector2(points[i].x, points[i].z))
+	var result := Geometry2D.offset_polygon(pts2d, -amount)
+	if result.size() == 0:
+		return PackedVector3Array()
+	var out: PackedVector3Array = []
+	for p2: Vector2 in result[0]:
+		out.append(Vector3(p2.x, 0.0, p2.y))
+	# Close the polygon
+	if out.size() > 0:
+		out.append(out[0])
+	return out
+
+## Project a 3D point onto a line defined by origin + direction in XZ, return signed distance.
+static func project_xz(point: Vector3, origin: Vector3, direction: Vector3) -> float:
+	return (point.x - origin.x) * direction.x + (point.z - origin.z) * direction.z
+
+
+# ─── Terrain-draped polyline subdivision ──────────────────────────────────────
+
+## Subdivide a polyline so that no segment is longer than max_step meters,
+## re-sampling elevation from the HeightProvider at every new intermediate
+## point. This makes roads, waterways and other ribbons follow the terrain
+## rather than linearly interpolating between sparse OSM nodes.
+##
+## Returns the original points unchanged when no HeightProvider is available
+## or when every segment is already short enough.
+## Clip a polyline (road/waterway/railway centreline) to a world-XZ rectangle,
+## returning the sub-polylines that lie inside it. A country-spanning way (e.g.
+## the N57 primary road) is present in EVERY tile it touches; without clipping,
+## build_road rebuilds the whole way — subdivided to terrain and draped — in each
+## of those tiles (~107 ms each). Clipping first means a tile only builds the part
+## of the way within its bounds.
+##
+## rect is [min_x, max_x, min_z, max_z]. `margin` expands the rect so consecutive
+## tiles' clipped ribbons OVERLAP slightly at the shared edge, leaving no visible
+## gap at the seam (the asphalt is depth-write-disabled, so the overlap is free).
+## A segment crossing the boundary is split at the crossing; a way that leaves and
+## re-enters the rect yields multiple sub-polylines. Each retains ≥2 points.
+static func clip_polyline_to_rect(
+		points: PackedVector3Array, rect: Array, margin: float = 0.0) -> Array:
+	var out: Array = []
+	if points.size() < 2:
+		return out
+	var min_x: float = rect[0] - margin
+	var max_x: float = rect[1] + margin
+	var min_z: float = rect[2] - margin
+	var max_z: float = rect[3] + margin
+
+	var current := PackedVector3Array()
+	for i: int in range(points.size() - 1):
+		var a := points[i]
+		var b := points[i + 1]
+		# Liang–Barsky clip of segment a→b against the rect (in XZ; Y carried by
+		# lerp so the clipped endpoints keep a sensible height).
+		var seg := _clip_segment_xz(a, b, min_x, max_x, min_z, max_z)
+		if seg.is_empty():
+			# Segment fully outside: end any run in progress.
+			if current.size() >= 2:
+				out.append(current)
+			current = PackedVector3Array()
+			continue
+		var ca: Vector3 = seg[0]
+		var cb: Vector3 = seg[1]
+		# Start a new run if this clipped segment doesn't continue the last point.
+		if current.is_empty() or current[current.size() - 1].distance_to(ca) > 0.001:
+			if current.size() >= 2:
+				out.append(current)
+			current = PackedVector3Array()
+			current.append(ca)
+		current.append(cb)
+	if current.size() >= 2:
+		out.append(current)
+	return out
+
+## Liang–Barsky segment clip in the XZ plane. Returns [] when the segment is
+## wholly outside the rect, else [clipped_a, clipped_b] with Y linearly
+## interpolated to the clipped parameters.
+static func _clip_segment_xz(
+		a: Vector3, b: Vector3, min_x: float, max_x: float,
+		min_z: float, max_z: float) -> Array:
+	var t0 := 0.0
+	var t1 := 1.0
+	var dx := b.x - a.x
+	var dz := b.z - a.z
+	# Each boundary as (p, q): t must satisfy p*t <= q. Clamp [t0,t1] accordingly.
+	var p := [-dx, dx, -dz, dz]
+	var q := [a.x - min_x, max_x - a.x, a.z - min_z, max_z - a.z]
+	for k: int in range(4):
+		if absf(p[k]) < 0.000001:
+			if q[k] < 0.0:
+				return []  # parallel and outside this boundary
+			continue
+		var r: float = q[k] / p[k]
+		if p[k] < 0.0:
+			t0 = maxf(t0, r)
+		else:
+			t1 = minf(t1, r)
+		if t0 > t1:
+			return []
+	var ca := a.lerp(b, t0)
+	var cb := a.lerp(b, t1)
+	return [ca, cb]
+
+
+static func subdivide_polyline_to_terrain(
+		points: PackedVector3Array,
+		hp: HeightProvider,
+		max_step: float,
+) -> PackedVector3Array:
+	if points.size() < 2:
+		return points
+	if hp == null or not hp.is_ready():
+		return points
+
+	var result: PackedVector3Array = []
+	# Re-sample every vertex (including original OSM nodes) against the terrain
+	# *mesh* surface, not the raw bilinear DEM field. The OSM parser lifts nodes
+	# with bilinear sampling, which drifts off the triangulated mesh on slopes;
+	# sample_mesh_height snaps the whole ribbon flush onto the built terrain.
+	result.append(Vector3(points[0].x, hp.sample_mesh_height(points[0].x, points[0].z), points[0].z))
+
+	for i: int in range(points.size() - 1):
+		var a := points[i]
+		var b := points[i + 1]
+		# Distance in the XZ plane (horizontal length of the segment).
+		var dx := b.x - a.x
+		var dz := b.z - a.z
+		var seg_len := sqrt(dx * dx + dz * dz)
+
+		if seg_len <= max_step:
+			# Segment is short enough — keep the endpoint, re-sampled onto the mesh.
+			result.append(Vector3(b.x, hp.sample_mesh_height(b.x, b.z), b.z))
+		else:
+			# Subdivide: insert evenly-spaced intermediate points, each draped on
+			# the mesh triangle it falls in.
+			var n_sub := int(ceil(seg_len / max_step))
+			for s: int in range(1, n_sub + 1):
+				var t := float(s) / float(n_sub)
+				var px := a.x + dx * t
+				var pz := a.z + dz * t
+				var py := hp.sample_mesh_height(px, pz)
+				result.append(Vector3(px, py, pz))
+
+	return result
+
+
+# ─── Terrain-conforming ribbon quad ──────────────────────────────────────────
+
+## Emit a road/ribbon quad so that its surface conforms EXACTLY to the terrain
+## mesh, leaving no gap for the ground to poke through.
+##
+## A flat quad spanning a terrain cell sits below any fold (the cell diagonal or
+## a neighbouring cell's slope change) that crosses it, so the terrain pierces up
+## through the road on bumpy ground. To prevent this we clip the quad against the
+## terrain's own triangulation: for every terrain triangle the quad overlaps we
+## intersect the quad with that triangle (Sutherland–Hodgman) and emit the
+## clipped piece draped on the terrain. Because each emitted triangle lies within
+## a single terrain triangle, the road surface and the terrain surface coincide
+## there — the road can never dip below the ground, and adds only as much
+## geometry as the terrain detail under it requires.
+##
+## The terrain grid mirrors HeightProvider.sample_mesh_height: square cells of
+## edge `grid_step` with origins at integer multiples of grid_step from the world
+## origin, each split into two triangles along the cell's NW–SE diagonal.
+## Vertices are draped with sample_mesh_height and lifted by `y_offset`.
+##
+## quad: 4 XZ corners (Vector2(x, z)) in order around the quad (winding is
+## normalized internally). hp must be ready; grid_step must be > 0.
+## When `uv_fn` is a valid Callable it is invoked as uv_fn(Vector2(x, z)) -> Vector2
+## for every emitted vertex, and the result is set as the vertex UV before the
+## vertex is added. This lets callers attach along/across road coordinates that
+## survive the terrain clipping (used for procedural lane markings). Pass an
+## empty Callable to skip UVs entirely.
+static func emit_terrain_conforming_quad(
+		st: SurfaceTool,
+		quad: PackedVector2Array,
+		hp: HeightProvider,
+		grid_step: float,
+		y_offset: float,
+		uv_fn: Callable = Callable(),
+) -> void:
+	if quad.size() < 3 or hp == null or not hp.is_ready() or grid_step <= 0.0:
+		return
+	var has_uv := uv_fn.is_valid()
+
+	# Bounding cell range the quad can touch.
+	var minx := INF
+	var maxx := -INF
+	var minz := INF
+	var maxz := -INF
+	for p: Vector2 in quad:
+		minx = minf(minx, p.x)
+		maxx = maxf(maxx, p.x)
+		minz = minf(minz, p.y)
+		maxz = maxf(maxz, p.y)
+	var cx0 := floori(minx / grid_step)
+	var cx1 := floori(maxx / grid_step)
+	var cz0 := floori(minz / grid_step)
+	var cz1 := floori(maxz / grid_step)
+
+	var quad_arr: Array[Vector2] = []
+	for p: Vector2 in quad:
+		quad_arr.append(p)
+
+	for cx: int in range(cx0, cx1 + 1):
+		for cz: int in range(cz0, cz1 + 1):
+			var x0 := float(cx) * grid_step
+			var z0 := float(cz) * grid_step
+			var x1 := x0 + grid_step
+			var z1 := z0 + grid_step
+			# The two terrain triangles of this cell. sample_mesh_height splits on
+			# u >= v (east fraction >= south fraction): triangle (NW, NE, SE) and
+			# triangle (NW, SE, SW).
+			var tri_a: Array[Vector2] = [
+				Vector2(x0, z0), Vector2(x1, z0), Vector2(x1, z1)
+			]
+			var tri_b: Array[Vector2] = [
+				Vector2(x0, z0), Vector2(x1, z1), Vector2(x0, z1)
+			]
+			for tri: Array in [tri_a, tri_b]:
+				var piece := _clip_poly_to_triangle(quad_arr, tri)
+				if piece.size() < 3:
+					continue
+				# Fan-triangulate the clipped piece, draping each vertex.
+				var o := piece[0]
+				var o3 := Vector3(o.x, hp.sample_mesh_height(o.x, o.y) + y_offset, o.y)
+				var o_uv := (uv_fn.call(Vector2(o.x, o.y)) as Vector2) if has_uv else Vector2.ZERO
+				for k: int in range(1, piece.size() - 1):
+					var p1: Vector2 = piece[k]
+					var p2: Vector2 = piece[k + 1]
+					var v1 := Vector3(p1.x, hp.sample_mesh_height(p1.x, p1.y) + y_offset, p1.y)
+					var v2 := Vector3(p2.x, hp.sample_mesh_height(p2.x, p2.y) + y_offset, p2.y)
+					# Wind o, v2, v1 so the face normal points up (matches the
+					# road's Vector3.UP convention).
+					if has_uv:
+						st.set_uv(o_uv)
+					st.set_normal(Vector3.UP); st.add_vertex(o3)
+					if has_uv:
+						st.set_uv(uv_fn.call(Vector2(p2.x, p2.y)) as Vector2)
+					st.set_normal(Vector3.UP); st.add_vertex(v2)
+					if has_uv:
+						st.set_uv(uv_fn.call(Vector2(p1.x, p1.y)) as Vector2)
+					st.set_normal(Vector3.UP); st.add_vertex(v1)
+
+
+## Clip a convex polygon (Array[Vector2]) to a triangle via Sutherland–Hodgman,
+## returning the (possibly empty) intersection polygon. Coordinates are XZ
+## (Vector2.x = world X, Vector2.y = world Z).
+static func _clip_poly_to_triangle(poly: Array[Vector2], tri: Array[Vector2]) -> Array[Vector2]:
+	var result: Array[Vector2] = poly.duplicate()
+	for e: int in range(3):
+		if result.size() < 3:
+			return []
+		var p0: Vector2 = tri[e]
+		var p1: Vector2 = tri[(e + 1) % 3]
+		var third: Vector2 = tri[(e + 2) % 3]
+		# Inward half-plane normal for this edge; flip so the triangle interior
+		# (the third vertex) satisfies dot(n, p) <= c.
+		var edge := p1 - p0
+		var nrm := Vector2(-edge.y, edge.x)
+		var c := nrm.x * p0.x + nrm.y * p0.y
+		if nrm.x * third.x + nrm.y * third.y - c > 0.0:
+			nrm = -nrm
+			c = -c
+		result = _clip_poly_to_halfplane(result, nrm, c)
+	return result
+
+
+## Keep the part of `poly` on the inside of the half-plane dot(n, p) <= c.
+static func _clip_poly_to_halfplane(poly: Array[Vector2], n: Vector2, c: float) -> Array[Vector2]:
+	var out: Array[Vector2] = []
+	var cnt := poly.size()
+	if cnt < 3:
+		return out
+	for i: int in range(cnt):
+		var cur: Vector2 = poly[i]
+		var nxt: Vector2 = poly[(i + 1) % cnt]
+		var d_cur := n.x * cur.x + n.y * cur.y - c
+		var d_nxt := n.x * nxt.x + n.y * nxt.y - c
+		var cur_in := d_cur <= 1e-9
+		var nxt_in := d_nxt <= 1e-9
+		if cur_in:
+			out.append(cur)
+		if cur_in != nxt_in:
+			var t := d_cur / (d_cur - d_nxt)
+			out.append(cur.lerp(nxt, t))
+	return out
+
+
+# ─── Terrain-draped polygon mesh ─────────────────────────────────────────────
+
+## Build a polygon mesh that conforms to the terrain grid by subdividing the
+## polygon into terrain-cell-sized pieces and sampling the HeightProvider at
+## every vertex. This prevents large area polygons from floating above or
+## clipping through the undulating terrain.
+##
+## When no HeightProvider is supplied (flat world), falls back to the simple
+## build_flat_polygon_mesh.
+##
+## grid_step is the terrain cell size (tile_size / terrain_subdivisions).
+## y_offset is added to the sampled elevation to prevent z-fighting with the
+## ground mesh (typically 0.01–0.02).
+## clip_rect limits the grid iteration to a specific world-space rectangle
+## (Vector4: min_x, max_x, min_z, max_z). Large polygons spanning many tiles
+## MUST pass the current tile bounds here to avoid iterating over thousands
+## of grid cells. When null the polygon's own AABB is used (only safe for
+## small polygons).
+static func build_terrain_draped_mesh(
+		points: PackedVector3Array,
+		color: Color,
+		hp: HeightProvider,
+		grid_step: float,
+		y_offset: float = 0.01,
+		clip_rect: Variant = null,  # null or Array[float] [min_x, max_x, min_z, max_z]
+		render_priority: int = GROUND_NO_PRIORITY,
+) -> MeshInstance3D:
+	if points.size() < 3:
+		return null
+	if hp == null or not hp.is_ready():
+		return build_flat_polygon_mesh(points, color, y_offset, true, render_priority)
+
+	# Convert the polygon to 2D (XZ plane) for clipping operations.
+	var poly_2d: PackedVector2Array = []
+	var count := points.size()
+	# Strip the closing duplicate if present.
+	if count > 1 and points[0].distance_to(points[count - 1]) < 0.01:
+		count -= 1
+	for i: int in range(count):
+		poly_2d.append(Vector2(points[i].x, points[i].z))
+
+	# Determine the grid iteration bounds. When a clip_rect is provided (the
+	# current tile bounds), use it instead of the polygon's full AABB so we
+	# only process the cells that belong to this tile.
+	var min_x: float
+	var max_x: float
+	var min_z: float
+	var max_z: float
+	if clip_rect != null:
+		min_x = clip_rect[0]
+		max_x = clip_rect[1]
+		min_z = clip_rect[2]
+		max_z = clip_rect[3]
+	else:
+		var bounds := polygon_bounds_xz(points)
+		min_x = bounds[0]
+		max_x = bounds[1]
+		min_z = bounds[2]
+		max_z = bounds[3]
+
+	# Pre-clip the (potentially huge, many-thousand-point) polygon to the tile
+	# rectangle ONCE. Without this, a country-scale feature — e.g. the
+	# Grevelingenmeer lake — is intersected against the full ring in EVERY grid
+	# cell of the tile (≈1000 cells × thousands of points ≈ 370 ms). Clipping to
+	# the tile first collapses the ring to just its tile-local part, so the
+	# per-cell intersections below run against a small polygon. When no clip_rect
+	# is given (small polygons) we keep the original single-polygon path.
+	var poly_parts: Array = []
+	if clip_rect != null:
+		var tile_rect := PackedVector2Array([
+			Vector2(min_x, min_z), Vector2(min_x, max_z),
+			Vector2(max_x, max_z), Vector2(max_x, min_z),
+		])
+		poly_parts = Geometry2D.intersect_polygons(tile_rect, poly_2d)
+		if poly_parts.is_empty():
+			return null  # polygon doesn't actually reach into this tile
+	else:
+		poly_parts = [poly_2d]
+
+	var grid_x0 := floorf(min_x / grid_step) * grid_step
+	var grid_z0 := floorf(min_z / grid_step) * grid_step
+	var grid_x1 := ceilf(max_x / grid_step) * grid_step
+	var grid_z1 := ceilf(max_z / grid_step) * grid_step
+
+	var st := SurfaceTool.new()
+	st.begin(Mesh.PRIMITIVE_TRIANGLES)
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	_apply_ground_layering(mat, render_priority)
+	st.set_material(mat)
+
+	var has_tris := false
+	var cell_x := grid_x0
+	while cell_x < grid_x1 - 0.001:
+		var cell_z := grid_z0
+		var next_x := cell_x + grid_step
+		while cell_z < grid_z1 - 0.001:
+			var next_z := cell_z + grid_step
+			# Build the grid cell rectangle.
+			var cell_rect: PackedVector2Array = PackedVector2Array([
+				Vector2(cell_x, cell_z),
+				Vector2(cell_x, next_z),
+				Vector2(next_x, next_z),
+				Vector2(next_x, cell_z),
+			])
+
+			# Intersect cell with each tile-local polygon part.
+			for part: PackedVector2Array in poly_parts:
+				var clips := Geometry2D.intersect_polygons(cell_rect, part)
+				for clip: PackedVector2Array in clips:
+					var indices := Geometry2D.triangulate_polygon(clip)
+					if indices.size() == 0:
+						continue
+					for idx: int in indices:
+						var p2 := clip[idx]
+						# Drape on the terrain *mesh* triangle (not raw bilinear) so
+						# the area surface coincides with the ground it sits on.
+						var wy := hp.sample_mesh_height(p2.x, p2.y) + y_offset
+						st.set_normal(Vector3.UP)
+						st.add_vertex(Vector3(p2.x, wy, p2.y))
+						has_tris = true
+
+			cell_z = next_z
+		cell_x = next_x
+
+	if not has_tris:
+		return null
+
+	var mesh_instance := MeshInstance3D.new()
+	mesh_instance.mesh = st.commit()
+	return mesh_instance
+
+
+## Return true when tags represent a scrub area (natural=scrub).
+static func is_scrub(tags: Dictionary) -> bool:
+	return tags.get("natural", "") == "scrub"
+
+## Return true when tags represent a forest/wood area.
+static func is_forest(tags: Dictionary) -> bool:
+	return tags.get("natural", "") == "wood" or tags.get("landuse", "") == "forest"
+
+
+# ─── Forest tree scattering ──────────────────────────────────────────────────
+
+## Density of lollipop trees per square metre.  0.05 ≈ one tree per 20 m².
+const FOREST_DENSITY := 0.05
+## Height range of the trunk (metres).
+const FOREST_TRUNK_MIN_H := 3.0
+const FOREST_TRUNK_MAX_H := 6.0
+## Trunk radius (metres).
+const FOREST_TRUNK_RADIUS := 0.15
+## Crown (ball) radius range (metres).
+const FOREST_CROWN_MIN_R := 1.5
+const FOREST_CROWN_MAX_R := 3.0
+## Dark forest-floor colour painted under the trees.
+const FOREST_GROUND_COLOR := Color(0.12, 0.35, 0.08)
+## Trunk colour (bark brown).
+const FOREST_TRUNK_COLOR := Color(0.30, 0.20, 0.11)
+## Palette of crown greens. A wider, more natural spread — deep pine, mid
+## broadleaf, olive, and a couple of lighter/yellower canopies — so a forest
+## reads as many species/ages rather than one cloned green. Values run a touch
+## brighter than before because the baked crown shading gradient darkens the
+## undersides, so the average tone lands about where the old flat crowns did.
+const FOREST_CROWN_COLORS: Array[Color] = [
+	Color(0.16, 0.40, 0.11),   # deep conifer green
+	Color(0.22, 0.48, 0.14),   # mid broadleaf
+	Color(0.30, 0.52, 0.16),   # lighter broadleaf
+	Color(0.34, 0.50, 0.18),   # yellow-green (fresh growth)
+	Color(0.24, 0.44, 0.13),   # olive
+	Color(0.19, 0.46, 0.12),   # cool green
+]
+
+## Cached procedural lollipop-tree mesh (built once, reused everywhere).
+static var _lollipop_mesh_cache: ArrayMesh = null
+
+## Build a Node3D for a forest area: dark ground polygon + scattered lollipop
+## trees (cylinder trunk + sphere crown) via MultiMeshInstance3D.
+static func build_forest_area(
+		points: PackedVector3Array,
+		hp: HeightProvider,
+		grid_step: float,
+		y_offset: float = 0.01,
+		clip_rect: Variant = null,
+		render_priority: int = GROUND_NO_PRIORITY,
+) -> Node3D:
+	if points.size() < 3:
+		return null
+
+	var root := Node3D.new()
+
+	# --- ground polygon ---
+	var ground: MeshInstance3D
+	if hp != null and hp.is_ready() and grid_step > 0.0:
+		ground = build_terrain_draped_mesh(points, FOREST_GROUND_COLOR, hp, grid_step, y_offset, clip_rect, render_priority)
+	else:
+		ground = build_flat_polygon_mesh(points, FOREST_GROUND_COLOR, y_offset, true, render_priority)
+	if ground != null:
+		ground.name = "ForestGround"
+		root.add_child(ground)
+
+	# --- scatter positions ---
+	var scatter := _scatter_points_in_polygon(points, hp, FOREST_DENSITY, clip_rect)
+	if scatter.size() == 0:
+		if ground != null:
+			return root
+		return null
+
+	# --- ensure lollipop mesh is cached ---
+	if _lollipop_mesh_cache == null:
+		_build_lollipop_mesh()
+
+	# --- build MultiMesh with per-instance scale ---
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.instance_count = scatter.size()
+	mm.mesh = _lollipop_mesh_cache
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(Vector2(points[0].x, points[0].z)) + 42
+
+	for i: int in range(scatter.size()):
+		var pos: Vector3 = scatter[i]
+		# Random uniform scale so trunk height and crown radius vary together.
+		var s := rng.randf_range(0.6, 1.3)
+		var t := Transform3D()
+		t = t.scaled(Vector3(s, s, s))
+		t.origin = pos
+		mm.set_instance_transform(i, t)
+		mm.set_instance_color(i, FOREST_CROWN_COLORS[rng.randi() % FOREST_CROWN_COLORS.size()])
+
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = mm
+	mmi.name = "ForestTrees"
+	root.add_child(mmi)
+
+	return root
+
+
+## Offsets (x, y, z) and radius of each crown lobe, in unit-mesh metres. Several
+## overlapping spheres of differing size/position build an irregular, fuller
+## canopy that reads as real foliage instead of a single billiard-ball crown.
+## The main lobe sits on the trunk top (~y=5.5); satellites cluster around it.
+const _CROWN_LOBES: Array = [
+	[Vector3(0.0, 5.6, 0.0), 2.05],     # main central mass
+	[Vector3(1.25, 5.0, 0.9), 1.35],    # lower-right-front bulge
+	[Vector3(-1.1, 5.15, -0.95), 1.4],  # lower-left-back bulge
+	[Vector3(0.3, 6.75, -1.2), 1.25],   # upper-back crest (catches the most sun)
+	[Vector3(-0.55, 6.4, 1.15), 1.2],   # upper-front puff
+	[Vector3(0.85, 5.55, -1.0), 1.1],   # back filler
+]
+## Crown vertical extent the shading gradient spans (unit-mesh metres): the
+## bottom of the canopy vs. the sunlit top.
+const _CROWN_BOTTOM_Y := 3.6
+const _CROWN_TOP_Y := 8.0
+## Brightness of the shaded underside vs. the sunlit top (multiplies the
+## per-instance crown colour, so it stays a tint not a fixed colour).
+const _CROWN_SHADE_MIN := 0.55
+const _CROWN_SHADE_MAX := 1.12
+
+## Build a stylised-but-plausible tree mesh: a slightly tapered trunk plus a
+## multi-lobe crown with a baked top-lit shading gradient.
+##
+## The mesh is unit-scale (trunk ~4.5 m, crown clustered above it) so the
+## MultiMesh per-instance scale produces natural size variation and the
+## per-instance colour tints the whole canopy.
+##
+## Crown vertices carry a greyscale vertex colour (a vertical light gradient:
+## darker underside, brighter sunlit top). Because the MultiMesh sets a per-tree
+## albedo colour that MODULATES the vertex colour, the gradient survives as
+## light/shade while each tree still gets its own green — the underside reads as
+## self-shadowed foliage rather than a flat ball.
+static func _build_lollipop_mesh() -> void:
+	var merged := ArrayMesh.new()
+
+	# --- trunk (tapered CylinderMesh: thinner at the top like a real bole) ---
+	var trunk := CylinderMesh.new()
+	trunk.top_radius = FOREST_TRUNK_RADIUS * 0.6
+	trunk.bottom_radius = FOREST_TRUNK_RADIUS * 1.35
+	trunk.height = 4.5  # base trunk height before per-instance scale
+	trunk.radial_segments = 7
+	trunk.rings = 1
+
+	var trunk_mat := StandardMaterial3D.new()
+	trunk_mat.albedo_color = FOREST_TRUNK_COLOR
+	trunk_mat.roughness = 0.95
+
+	var st_trunk := SurfaceTool.new()
+	st_trunk.begin(Mesh.PRIMITIVE_TRIANGLES)
+	# Shift trunk up so its base sits at Y=0.
+	st_trunk.append_from(trunk, 0, Transform3D(Basis.IDENTITY, Vector3(0, 2.25, 0)))
+	st_trunk.set_material(trunk_mat)
+	st_trunk.commit(merged)
+
+	# --- crown: several overlapping spheres with a baked vertical light ramp ---
+	var crown_mat := StandardMaterial3D.new()
+	crown_mat.vertex_color_use_as_albedo = true
+	crown_mat.roughness = 0.9
+
+	var st_crown := SurfaceTool.new()
+	st_crown.begin(Mesh.PRIMITIVE_TRIANGLES)
+	for lobe: Array in _CROWN_LOBES:
+		var centre: Vector3 = lobe[0]
+		var radius: float = lobe[1]
+		_append_crown_lobe(st_crown, centre, radius)
+	st_crown.set_material(crown_mat)
+	st_crown.commit(merged)
+
+	_lollipop_mesh_cache = merged
+
+
+## Append one crown lobe (a sphere at `centre` of `radius`) to `st`, writing a
+## per-vertex greyscale colour that ramps from _CROWN_SHADE_MIN at the canopy
+## bottom to _CROWN_SHADE_MAX at the top so the finished crown is top-lit.
+static func _append_crown_lobe(st: SurfaceTool, centre: Vector3, radius: float) -> void:
+	var sphere := SphereMesh.new()
+	sphere.radius = radius
+	sphere.height = radius * 2.0
+	sphere.radial_segments = 7
+	sphere.rings = 5
+
+	# Pull the sphere's arrays so we can colour each vertex by world height.
+	var arrays := sphere.get_mesh_arrays()
+	var verts: PackedVector3Array = arrays[Mesh.ARRAY_VERTEX]
+	var normals: PackedVector3Array = arrays[Mesh.ARRAY_NORMAL]
+	var indices: PackedInt32Array = arrays[Mesh.ARRAY_INDEX]
+	var span: float = maxf(_CROWN_TOP_Y - _CROWN_BOTTOM_Y, 0.001)
+
+	for idx: int in indices:
+		var v: Vector3 = verts[idx] + centre
+		var n: Vector3 = normals[idx]
+		# Height ramp 0..1 across the whole canopy.
+		var t: float = clampf((v.y - _CROWN_BOTTOM_Y) / span, 0.0, 1.0)
+		# Faces pointing up catch a little extra light; downward faces darken.
+		var up: float = clampf(n.y * 0.5 + 0.5, 0.0, 1.0)
+		var shade: float = lerpf(_CROWN_SHADE_MIN, _CROWN_SHADE_MAX, t * 0.7 + up * 0.3)
+		st.set_color(Color(shade, shade, shade))
+		st.set_normal(n)
+		st.add_vertex(v)
+
+
+# ─── Scrub ball scattering ───────────────────────────────────────────────────
+
+## Density of scrub balls per square meter.  Adjust to taste.
+const SCRUB_DENSITY := 0.15
+## Minimum / maximum diameter of scrub balls (meters).
+const SCRUB_MIN_DIAMETER := 1.0
+const SCRUB_MAX_DIAMETER := 3.0
+## Palette of greens used for scrub balls (random per ball).
+const SCRUB_COLORS: Array[Color] = [
+	Color(0.25, 0.50, 0.15),
+	Color(0.30, 0.55, 0.20),
+	Color(0.35, 0.45, 0.18),
+	Color(0.28, 0.52, 0.12),
+	Color(0.40, 0.58, 0.22),
+]
+## Darker ground colour underneath the scrub balls.
+const SCRUB_GROUND_COLOR := Color(0.35, 0.45, 0.20)
+
+## Build a Node3D for a scrub area: a flat ground polygon plus scattered green
+## balls of varying size rendered via MultiMeshInstance3D.
+##
+## hp may be null (flat world).  When present, balls sit on terrain.
+## y_offset lifts the ground polygon to prevent z-fighting.
+static func build_scrub_area(
+		points: PackedVector3Array,
+		hp: HeightProvider,
+		grid_step: float,
+		y_offset: float = 0.01,
+		clip_rect: Variant = null,
+		render_priority: int = GROUND_NO_PRIORITY,
+) -> Node3D:
+	if points.size() < 3:
+		return null
+
+	var root := Node3D.new()
+
+	# --- ground polygon ---
+	var ground: MeshInstance3D
+	if hp != null and hp.is_ready() and grid_step > 0.0:
+		ground = build_terrain_draped_mesh(points, SCRUB_GROUND_COLOR, hp, grid_step, y_offset, clip_rect, render_priority)
+	else:
+		ground = build_flat_polygon_mesh(points, SCRUB_GROUND_COLOR, y_offset, true, render_priority)
+	if ground != null:
+		ground.name = "ScrubGround"
+		root.add_child(ground)
+
+	# --- scatter positions inside polygon ---
+	var scatter_points := _scatter_points_in_polygon(points, hp, SCRUB_DENSITY, clip_rect)
+	if scatter_points.size() == 0:
+		if ground != null:
+			return root
+		return null
+
+	# --- build MultiMesh of spheres ---
+	var mm := MultiMesh.new()
+	mm.transform_format = MultiMesh.TRANSFORM_3D
+	mm.use_colors = true
+	mm.instance_count = scatter_points.size()
+
+	# Shared sphere mesh (low-poly: 8 rings x 12 sectors is fine at distance)
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.5
+	sphere.height = 1.0
+	sphere.radial_segments = 12
+	sphere.rings = 8
+	# Use vertex colours from the MultiMesh.
+	var mat := StandardMaterial3D.new()
+	mat.vertex_color_use_as_albedo = true
+	sphere.material = mat
+	mm.mesh = sphere
+
+	var rng := RandomNumberGenerator.new()
+	# Deterministic seed from first polygon vertex so rebuilds are stable.
+	rng.seed = hash(Vector2(points[0].x, points[0].z))
+
+	for i: int in range(scatter_points.size()):
+		var pos: Vector3 = scatter_points[i]
+		var diameter := rng.randf_range(SCRUB_MIN_DIAMETER, SCRUB_MAX_DIAMETER)
+		var scale_val := diameter  # sphere mesh is 1 m, so scale == diameter
+		var t := Transform3D()
+		t = t.scaled(Vector3(scale_val, scale_val, scale_val))
+		# Place centre of ball at ground + half radius so it sits *on* the surface.
+		t.origin = Vector3(pos.x, pos.y + diameter * 0.5, pos.z)
+		mm.set_instance_transform(i, t)
+		mm.set_instance_color(i, SCRUB_COLORS[rng.randi() % SCRUB_COLORS.size()])
+
+	var mmi := MultiMeshInstance3D.new()
+	mmi.multimesh = mm
+	mmi.name = "ScrubBalls"
+	root.add_child(mmi)
+
+	return root
+
+
+## Scatter random sample points inside a polygon using rejection sampling on
+## its AABB.  Returns world-space positions with Y set from the
+## HeightProvider (or 0 when flat).
+## density overrides SCRUB_DENSITY when supplied (e.g. forests are sparser).
+## clip_rect limits scatter to the current tile bounds ([min_x, max_x, min_z,
+## max_z]) so large polygons spanning many tiles only place vegetation inside
+## the tile being built. When null the polygon's own AABB is used.
+static func _scatter_points_in_polygon(
+		points: PackedVector3Array,
+		hp: HeightProvider,
+		density: float = SCRUB_DENSITY,
+		clip_rect: Variant = null,
+) -> Array[Vector3]:
+	var result: Array[Vector3] = []
+	var bounds := polygon_bounds_xz(points)
+	var min_x := bounds[0]
+	var max_x := bounds[1]
+	var min_z := bounds[2]
+	var max_z := bounds[3]
+
+	# Clamp scatter region to the tile clip rect so vegetation only spawns
+	# inside the tile currently being built. Without this, a forest spanning
+	# several tiles would place trees across its entire footprint in every
+	# tile that touches it, causing "flying trees" on unloaded neighbours.
+	if clip_rect != null:
+		min_x = maxf(min_x, clip_rect[0])
+		max_x = minf(max_x, clip_rect[1])
+		min_z = maxf(min_z, clip_rect[2])
+		max_z = minf(max_z, clip_rect[3])
+	if min_x >= max_x or min_z >= max_z:
+		return result
+	var area := (max_x - min_x) * (max_z - min_z)
+	if area < 1.0:
+		return result
+
+	var poly_2d: PackedVector2Array = []
+	var count := points.size()
+	if count > 1 and points[0].distance_to(points[count - 1]) < 0.01:
+		count -= 1
+	for i: int in range(count):
+		poly_2d.append(Vector2(points[i].x, points[i].z))
+
+	# Number of candidate points proportional to polygon AABB area.
+	var n_candidates := int(area * density)
+	# Cap to avoid performance issues on huge polygons.
+	n_candidates = mini(n_candidates, 4000)
+
+	var rng := RandomNumberGenerator.new()
+	rng.seed = hash(Vector2(points[0].x, points[0].z)) + 1
+
+	for _j: int in range(n_candidates):
+		var px := rng.randf_range(min_x, max_x)
+		var pz := rng.randf_range(min_z, max_z)
+		if Geometry2D.is_point_in_polygon(Vector2(px, pz), poly_2d):
+			var py := 0.0
+			if hp != null and hp.is_ready():
+				py = hp.sample_local_xz(px, pz)
+			result.append(Vector3(px, py, pz))
+
+	return result
+
+
+## Test whether a polygon fully covers a terrain tile. Used by the tile
+## manager to skip the visible terrain mesh under opaque area polygons.
+## Only checks the four tile corners (fast reject via AABB + 4 PIP tests).
+static func polygon_covers_tile(
+		points: PackedVector3Array,
+		tile_origin_x: float,
+		tile_origin_z: float,
+		tile_size: float,
+		_grid_step: float  # unused, kept for API compat
+) -> bool:
+	# Fast AABB reject: if the polygon's bounding box doesn't fully contain the
+	# tile rectangle, it can't possibly cover it.
+	var bounds := polygon_bounds_xz(points)
+	if bounds[0] > tile_origin_x or bounds[1] < tile_origin_x + tile_size:
+		return false
+	if bounds[2] > tile_origin_z or bounds[3] < tile_origin_z + tile_size:
+		return false
+
+	var poly_2d: PackedVector2Array = []
+	var count := points.size()
+	if count > 1 and points[0].distance_to(points[count - 1]) < 0.01:
+		count -= 1
+	for i: int in range(count):
+		poly_2d.append(Vector2(points[i].x, points[i].z))
+
+	# Check the four tile corners. If all are inside the polygon, the tile is
+	# fully covered (convex or concave polygons with re-entrants narrow enough
+	# to miss a corner are acceptable false-negatives — they just keep the
+	# terrain visible, which is safe).
+	var tx1 := tile_origin_x + tile_size
+	var tz1 := tile_origin_z + tile_size
+	if not Geometry2D.is_point_in_polygon(Vector2(tile_origin_x, tile_origin_z), poly_2d):
+		return false
+	if not Geometry2D.is_point_in_polygon(Vector2(tx1, tile_origin_z), poly_2d):
+		return false
+	if not Geometry2D.is_point_in_polygon(Vector2(tile_origin_x, tz1), poly_2d):
+		return false
+	if not Geometry2D.is_point_in_polygon(Vector2(tx1, tz1), poly_2d):
+		return false
+	return true

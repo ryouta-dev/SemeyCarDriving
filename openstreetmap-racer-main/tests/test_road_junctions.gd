@@ -1,0 +1,1022 @@
+extends GdUnitTestSuite
+
+## Junction RENDERING tests — the mesh side of the intersection system.
+##
+## The pure geometry (arm ordering, trim distances, cap outline) is covered by
+## test_road_junction_solver.gd. This suite pins how that solution becomes actual
+## scene geometry, and the invariant that matters most for the finished look:
+##
+##     the trimmed ribbon mouths and the junction cap must MEET —
+##     no gap you can see the ground through, no overlap that z-fights.
+##
+## ── What replaced what ───────────────────────────────────────────────────────
+## Roads used to be drawn FULL-LENGTH and simply overlapped at shared nodes (the
+## Mapnik model), with z-fighting avoided by never writing depth and painting
+## bigger road classes last. This suite previously asserted exactly that — that a
+## branch road reached all the way into the junction node.
+##
+## That model is gone. Roads now stop short of intersections and a real cap mesh
+## fills the crossing, which is why those assertions are inverted here. Because
+## the geometry no longer overlaps, roads can write depth again (better SSR/SSAO)
+## and bridges are separated by a real vertical offset rather than paint order.
+
+const OSMParser := preload("res://scripts/osm_parser.gd")
+const OSMWayBuilder := preload("res://scripts/osm_way_builder.gd")
+const OSMJunctionBuilder := preload("res://scripts/osm_junction_builder.gd")
+const RoadNetworkContext := preload("res://scripts/road_network_context.gd")
+const RoadJunctionSolver := preload("res://scripts/road_junction_solver.gd")
+const RoadMaterialFactory := preload("res://scripts/road_material_factory.gd")
+const RoadProfile := preload("res://scripts/road_profile.gd")
+const RoadRegion := preload("res://scripts/road_region.gd")
+
+
+func _node(id: int, x: float, z: float) -> OSMParser.OSMNode:
+	var n := OSMParser.OSMNode.new()
+	n.id = id
+	n.local_pos = Vector3(x, 0.0, z)
+	return n
+
+
+func _way(id: int, node_ids: Array, tags: Dictionary) -> OSMParser.OSMWay:
+	var w := OSMParser.OSMWay.new()
+	w.id = id
+	var ids: Array[int] = []
+	for n: int in node_ids:
+		ids.append(n)
+	w.node_ids = ids
+	var t := {"sidewalk": "no"}
+	t.merge(tags, true)
+	w.tags = t
+	return w
+
+
+## A four-way crossing at the origin: west-east way 1, north-south way 2.
+func _crossing(tags: Dictionary = {"highway": "residential"}) -> Dictionary:
+	var data := OSMParser.OSMData.new()
+	data.nodes = {
+		1: _node(1, -60.0, 0.0), 2: _node(2, 0.0, 0.0), 3: _node(3, 60.0, 0.0),
+		4: _node(4, 0.0, -60.0), 5: _node(5, 0.0, 60.0),
+	}
+	data.ways = {
+		1: _way(1, [1, 2, 3], tags),
+		2: _way(2, [4, 2, 5], tags),
+	}
+	var ways: Array = [data.ways[1], data.ways[2]]
+	return {
+		"data": data,
+		"ways": ways,
+		"net": RoadNetworkContext.build(ways, ways, data.nodes, []),
+	}
+
+
+## A four-way crossing whose two roads differ in class: west-east way 1 is a
+## primary, north-south way 2 a residential. The residential must give way, so
+## this is the fixture for anything about junction MARKINGS — an all-residential
+## crossing (see _crossing) is an unmarked priority-to-the-right junction and
+## correctly paints nothing at all.
+func _priority_crossing() -> Dictionary:
+	var data := OSMParser.OSMData.new()
+	data.nodes = {
+		1: _node(1, -60.0, 0.0), 2: _node(2, 0.0, 0.0), 3: _node(3, 60.0, 0.0),
+		4: _node(4, 0.0, -60.0), 5: _node(5, 0.0, 60.0),
+	}
+	data.ways = {
+		1: _way(1, [1, 2, 3], {"highway": "primary"}),
+		2: _way(2, [4, 2, 5], {"highway": "residential"}),
+	}
+	var ways: Array = [data.ways[1], data.ways[2]]
+	return {
+		"data": data,
+		"ways": ways,
+		"net": RoadNetworkContext.build(ways, ways, data.nodes, []),
+	}
+
+
+## The marking surface (surface 1) of a built junction, as a list of per-arm
+## along/across extents measured in each arm's own frame. `lat_min`/`lat_max`
+## keep the SIGN of the lateral offset, which is what distinguishes the approach
+## half of the carriageway from the oncoming one.
+##
+## Geometry is grouped by FACE, not by vertex. Per-vertex grouping does not work
+## at a crossing: a bar's outer corner sits out by the kerb, which is genuinely
+## nearer the PERPENDICULAR arm's mouth than its own. A face's centroid lies in
+## the middle of the marking and so is unambiguous.
+func _marking_extents(
+		junction: RoadJunctionSolver.Junction, mi: MeshInstance3D) -> Array:
+	var mdt := MeshDataTool.new()
+	if mi.mesh.get_surface_count() < 2 or mdt.create_from_surface(mi.mesh, 1) != OK:
+		return []
+	var per_arm: Dictionary = {}
+	for f: int in range(mdt.get_face_count()):
+		var v: Array[Vector3] = []
+		for k: int in range(3):
+			v.append(mdt.get_vertex(mdt.get_face_vertex(f, k)))
+		var centroid := (v[0] + v[1] + v[2]) / 3.0
+		# Score each arm by how close the centroid's along-distance is to where
+		# markings are emitted, rejecting arms it falls outside the width of.
+		var best := -1
+		var best_err := INF
+		for ai: int in range(junction.arms.size()):
+			var arm: RoadJunctionSolver.Arm = junction.arms[ai]
+			var d := arm.trim - 0.5
+			var rel := Vector3(centroid.x - junction.center.x, 0.0,
+				centroid.z - junction.center.z)
+			if absf(rel.dot(arm.lateral_at(d))) > arm.half_width + 0.1:
+				continue
+			var err := absf(rel.dot(arm.dir_at(d)) - d)
+			if err < best_err:
+				best_err = err
+				best = ai
+		if best < 0:
+			continue
+		if not per_arm.has(best):
+			per_arm[best] = []
+		for p: Vector3 in v:
+			(per_arm[best] as Array).append(p)
+
+	var out: Array = []
+	for ai: int in per_arm:
+		var arm: RoadJunctionSolver.Arm = junction.arms[ai]
+		var c := arm.point_at(junction.center, arm.trim - 0.5)
+		var a_min := INF
+		var a_max := -INF
+		var l_min := INF
+		var l_max := -INF
+		for v: Vector3 in per_arm[ai]:
+			var rel := Vector3(v.x - c.x, 0.0, v.z - c.z)
+			var a := rel.dot(arm.dir_at(arm.trim - 0.5))
+			var l := rel.dot(arm.lateral_at(arm.trim - 0.5))
+			a_min = minf(a_min, a)
+			a_max = maxf(a_max, a)
+			l_min = minf(l_min, l)
+			l_max = maxf(l_max, l)
+		out.append({
+			"arm": ai,
+			"highway": arm.highway_type,
+			"depth": a_max - a_min,
+			"span": l_max - l_min,
+			"lat_min": l_min,
+			"lat_max": l_max,
+		})
+	return out
+
+
+func _bounds_of_mesh(mesh: Mesh) -> Dictionary:
+	var b := {"min_x": INF, "max_x": -INF, "min_z": INF, "max_z": -INF}
+	if mesh == null:
+		return b
+	for s: int in range(mesh.get_surface_count()):
+		var mdt := MeshDataTool.new()
+		if mdt.create_from_surface(mesh, s) != OK:
+			continue
+		for vi: int in range(mdt.get_vertex_count()):
+			var v := mdt.get_vertex(vi)
+			b["min_x"] = minf(b["min_x"], v.x)
+			b["max_x"] = maxf(b["max_x"], v.x)
+			b["min_z"] = minf(b["min_z"], v.z)
+			b["max_z"] = maxf(b["max_z"], v.z)
+	return b
+
+
+# ─── Roads stop at intersections (replaces the old overlap model) ────────────
+
+func test_arm_is_trimmed_back_from_the_junction() -> void:
+	var fx := _crossing()
+	var builder := OSMWayBuilder.new()
+	builder.network = fx["net"]
+	var mi := builder.build_road(fx["data"].ways[2], fx["data"])
+	assert_object(mi).is_not_null()
+	if mi == null:
+		return
+	var b := _bounds_of_mesh(mi.mesh)
+	mi.free()
+	# Way 2 runs north-south THROUGH the junction, so both halves pull back from
+	# Z=0. Its mesh must therefore not reach the centre from either side.
+	assert_bool(b["min_z"] < -0.5 and b["max_z"] > 0.5) \
+		.override_failure_message("through road should span both sides") \
+		.is_true()
+
+
+func test_junction_cap_is_built_for_a_crossing() -> void:
+	var fx := _crossing()
+	var net: RoadNetworkContext = fx["net"]
+	var owned := net.owned_junctions()
+	assert_int(owned.size()) \
+		.override_failure_message("the crossing must produce one owned cap") \
+		.is_equal(1)
+
+	var mi := OSMJunctionBuilder.new().build_junction(owned[0])
+	assert_object(mi) \
+		.override_failure_message("junction cap mesh must be built") \
+		.is_not_null()
+	if mi == null:
+		return
+	assert_object(mi.mesh).is_not_null()
+	assert_int(mi.mesh.get_surface_count()).is_greater(0)
+	mi.free()
+
+
+func test_cap_covers_the_gap_left_by_trimming() -> void:
+	# THE core invariant: the cap must extend at least as far as each trimmed
+	# ribbon mouth, or a hole opens at the intersection.
+	var fx := _crossing()
+	var net: RoadNetworkContext = fx["net"]
+	var junction: RoadJunctionSolver.Junction = net.owned_junctions()[0]
+
+	var builder := OSMWayBuilder.new()
+	builder.network = net
+	var road := builder.build_road(fx["data"].ways[2], fx["data"])
+	assert_object(road).is_not_null()
+	if road == null:
+		return
+	var road_b := _bounds_of_mesh(road.mesh)
+	road.free()
+
+	var cap := OSMJunctionBuilder.new().build_junction(junction)
+	assert_object(cap).is_not_null()
+	if cap == null:
+		return
+	var cap_b := _bounds_of_mesh(cap.mesh)
+	cap.free()
+
+	# The northern ribbon starts at road_b.max_z going away from the junction;
+	# working from the south side, the cap must reach up to where it begins.
+	assert_float(cap_b["max_z"]) \
+		.override_failure_message(
+			"cap (max_z=%.2f) must reach the ribbon mouth" % cap_b["max_z"]) \
+		.is_greater(0.0)
+	assert_float(cap_b["min_z"]).is_less(0.0)
+
+
+func test_cap_spans_the_full_carriageway_width() -> void:
+	# A cap narrower than the roads would leave slivers of ground showing at the
+	# corners of the intersection.
+	var fx := _crossing()
+	var junction: RoadJunctionSolver.Junction = \
+		(fx["net"] as RoadNetworkContext).owned_junctions()[0]
+	var cap := OSMJunctionBuilder.new().build_junction(junction)
+	assert_object(cap).is_not_null()
+	if cap == null:
+		return
+	var b := _bounds_of_mesh(cap.mesh)
+	cap.free()
+	var road_width := RoadProfile.width_for(fx["data"].ways[1])
+	assert_float(b["max_x"] - b["min_x"]) \
+		.override_failure_message("cap must be at least as wide as the road") \
+		.is_greater_equal(road_width - 0.1)
+
+
+func test_no_cap_where_roads_merely_continue() -> void:
+	# Two ways meeting end to end is a continuation. Building a cap there would
+	# paint an intersection in the middle of a straight street.
+	var data := OSMParser.OSMData.new()
+	data.nodes = {
+		1: _node(1, 0.0, -60.0), 2: _node(2, 0.0, 0.0), 3: _node(3, 0.0, 60.0),
+	}
+	data.ways = {
+		1: _way(1, [1, 2], {"highway": "residential"}),
+		2: _way(2, [2, 3], {"highway": "residential"}),
+	}
+	var ways: Array = [data.ways[1], data.ways[2]]
+	var net := RoadNetworkContext.build(ways, ways, data.nodes, [])
+	assert_int(net.owned_junctions().size()) \
+		.override_failure_message("a continuation must not produce a cap") \
+		.is_equal(0)
+
+
+func test_t_junction_produces_a_cap() -> void:
+	var data := OSMParser.OSMData.new()
+	data.nodes = {
+		1: _node(1, -60.0, 0.0), 2: _node(2, 0.0, 0.0),
+		3: _node(3, 60.0, 0.0), 4: _node(4, 0.0, 60.0),
+	}
+	data.ways = {
+		1: _way(1, [1, 2, 3], {"highway": "residential"}),
+		2: _way(2, [2, 4], {"highway": "residential"}),
+	}
+	var ways: Array = [data.ways[1], data.ways[2]]
+	var net := RoadNetworkContext.build(ways, ways, data.nodes, [])
+	assert_int(net.owned_junctions().size()).is_equal(1)
+
+
+# ─── Tile-boundary agreement (the halo) ──────────────────────────────────────
+
+func test_neighbouring_tiles_agree_on_the_same_junction() -> void:
+	# A junction near a tile border is solved by BOTH tiles (each needs its trim
+	# distances). Fed the same halo, they must compute identical geometry or the
+	# street would be cut at two different points and show a step on the seam.
+	var fx := _crossing()
+	var ways: Array = fx["ways"]
+	var nodes: Dictionary = fx["data"].nodes
+
+	# Tile A owns the junction; tile B is a neighbour that only sees it via halo.
+	var tile_a := RoadNetworkContext.build(ways, ways, nodes, [-100.0, 100.0, -100.0, 100.0])
+	var tile_b := RoadNetworkContext.build(ways, ways, nodes, [100.0, 300.0, -100.0, 100.0])
+
+	assert_int(tile_a.owned_junctions().size()) \
+		.override_failure_message("the containing tile must own the cap").is_equal(1)
+	assert_int(tile_b.owned_junctions().size()) \
+		.override_failure_message("a neighbour must NOT also draw the cap").is_equal(0)
+
+	# Both must still agree on where to cut the road.
+	var trim_a := tile_a.trim_at(2, 2, true)
+	var trim_b := tile_b.trim_at(2, 2, true)
+	assert_float(trim_b) \
+		.override_failure_message(
+			"neighbouring tiles must agree on the trim (%.3f vs %.3f)" % [trim_a, trim_b]) \
+		.is_equal_approx(trim_a, 0.001)
+
+
+func test_cap_ownership_is_exclusive() -> void:
+	# Exactly one tile draws each cap; two would z-fight, none would leave a hole.
+	var fx := _crossing()
+	var ways: Array = fx["ways"]
+	var nodes: Dictionary = fx["data"].nodes
+	var owners := 0
+	# Four tiles tiling the plane around the origin junction at (0,0).
+	for rect: Array in [
+			[-100.0, 0.0, -100.0, 0.0], [0.0, 100.0, -100.0, 0.0],
+			[-100.0, 0.0, 0.0, 100.0], [0.0, 100.0, 0.0, 100.0]]:
+		owners += RoadNetworkContext.build(ways, ways, nodes, rect).owned_junctions().size()
+	assert_int(owners) \
+		.override_failure_message("exactly one tile must own the cap, got %d" % owners) \
+		.is_equal(1)
+
+
+# ─── Layering (replaces the old depth_draw_never trick) ─────────────────────
+
+func test_bridge_and_road_are_separated_vertically() -> void:
+	# With real intersections there is no coplanar overlap to resolve by paint
+	# order, so crossing roads at different layers are separated in SPACE.
+	var data := OSMParser.OSMData.new()
+	data.nodes = {1: _node(1, -60.0, 0.0), 2: _node(2, 60.0, 0.0)}
+	data.ways = {1: _way(1, [1, 2], {"highway": "primary", "bridge": "yes", "layer": "1"})}
+	var mi := OSMWayBuilder.new().build_road(data.ways[1], data)
+	assert_object(mi).is_not_null()
+	if mi == null:
+		return
+	var y := mi.position.y
+	mi.free()
+	assert_float(y) \
+		.override_failure_message("a bridge must be lifted clear of the road below") \
+		.is_greater(2.0)
+
+
+func test_junction_material_outranks_the_roads_it_joins() -> void:
+	# Where a cap and a ribbon mouth touch they are coplanar; the cap must win
+	# so the seam never shimmers.
+	var cap_mat := RoadMaterialFactory.create_junction_material("residential")
+	assert_int(cap_mat.render_priority) \
+		.override_failure_message("cap must paint above the roads feeding it") \
+		.is_greater(RoadMaterialFactory.render_priority_for("residential"))
+
+
+func test_junction_cap_uses_a_depth_writing_shader() -> void:
+	# REGRESSION: render_priority only orders TRANSPARENT materials. Sharing the
+	# roads' depth_draw_never asphalt left the cap unable to claim its pixels
+	# against opaque geometry, so the terrain or a landuse polygon drawn later
+	# painted over the intersection — a grass hole where the junction should be,
+	# even though the cap was built, in the scene and above the ground.
+	var mat := RoadMaterialFactory.create_junction_material("residential")
+	assert_object(mat).is_instanceof(ShaderMaterial)
+	var sm := mat as ShaderMaterial
+	# Check the render_mode LINE, not the whole source: the shader's own comment
+	# explains why depth_draw_never is wrong here, so a naive substring search
+	# matches the explanation rather than the declaration.
+	var mode_line := ""
+	for line: String in sm.shader.code.split("\n"):
+		if line.strip_edges().begins_with("render_mode"):
+			mode_line = line
+			break
+	assert_str(mode_line) \
+		.override_failure_message("cap shader must declare a render_mode") \
+		.is_not_empty()
+	assert_str(mode_line) \
+		.override_failure_message("junction caps must WRITE depth, got: %s" % mode_line) \
+		.not_contains("depth_draw_never")
+
+
+func test_junction_cap_has_no_uv_lane_markings() -> void:
+	# The cap has no along/across parameterisation, so UV-driven lane lines
+	# would smear across it. Markings there are explicit geometry instead.
+	var mat := RoadMaterialFactory.create_junction_material("residential")
+	var sm := mat as ShaderMaterial
+	assert_bool(sm.shader.code.contains("markings_enabled")) \
+		.override_failure_message("cap shader must not carry lane-marking code") \
+		.is_false()
+
+
+func test_bigger_road_still_outranks_smaller() -> void:
+	# Class ordering still matters for the remaining coplanar cases (a service
+	# road meeting a primary at a non-junction shared node, ground layering).
+	assert_int(RoadMaterialFactory.render_priority_for("motorway")) \
+		.is_greater(RoadMaterialFactory.render_priority_for("residential"))
+	assert_int(RoadMaterialFactory.render_priority_for("residential")) \
+		.is_greater(RoadMaterialFactory.render_priority_for("footway"))
+
+
+# ─── Kerbs at intersections ─────────────────────────────────────────────────
+
+func test_kerb_corners_are_built_when_arms_have_sidewalks() -> void:
+	var fx := _crossing({"highway": "residential", "sidewalk": "both"})
+	var junction: RoadJunctionSolver.Junction = \
+		(fx["net"] as RoadNetworkContext).owned_junctions()[0]
+
+	var lookup := {
+		1: {"left": true, "right": true},
+		2: {"left": true, "right": true},
+	}
+	var with_kerbs := OSMJunctionBuilder.new().build_junction(junction, lookup)
+	var without := OSMJunctionBuilder.new().build_junction(junction, {})
+	assert_object(with_kerbs).is_not_null()
+	assert_object(without).is_not_null()
+	if with_kerbs == null or without == null:
+		# Free whichever one WAS built before bailing, or it leaks as an orphan.
+		if with_kerbs != null:
+			with_kerbs.free()
+		if without != null:
+			without.free()
+		return
+	# Read the counts out before freeing, so the assertion can never run against
+	# a freed node (and can never skip the frees below on failure).
+	var kerbed_surfaces := with_kerbs.mesh.get_surface_count()
+	var bare_surfaces := without.mesh.get_surface_count()
+	with_kerbs.free()
+	without.free()
+	assert_int(kerbed_surfaces) \
+		.override_failure_message("kerbed junction must add corner geometry") \
+		.is_greater(bare_surfaces)
+
+
+func test_no_kerb_corners_when_roads_have_no_sidewalks() -> void:
+	# Strictly OSM-driven: no sidewalk tags means no kerbs, not assumed ones.
+	var fx := _crossing()
+	var junction: RoadJunctionSolver.Junction = \
+		(fx["net"] as RoadNetworkContext).owned_junctions()[0]
+	var lookup := {
+		1: {"left": false, "right": false},
+		2: {"left": false, "right": false},
+	}
+	var mi := OSMJunctionBuilder.new().build_junction(junction, lookup)
+	var bare := OSMJunctionBuilder.new().build_junction(junction, {})
+	assert_object(mi).is_not_null()
+	assert_object(bare).is_not_null()
+	if mi == null or bare == null:
+		if mi != null:
+			mi.free()
+		if bare != null:
+			bare.free()
+		return
+	var kerbless_surfaces := mi.mesh.get_surface_count()
+	var bare_surfaces := bare.mesh.get_surface_count()
+	mi.free()
+	bare.free()
+	assert_int(kerbless_surfaces) \
+		.override_failure_message("no sidewalk tags must mean no kerb geometry") \
+		.is_equal(bare_surfaces)
+
+
+# ─── Degenerate input ────────────────────────────────────────────────────────
+
+func test_null_junction_yields_no_mesh() -> void:
+	assert_object(OSMJunctionBuilder.new().build_junction(null)).is_null()
+
+
+func test_empty_network_context_is_harmless() -> void:
+	var net := RoadNetworkContext.build([], [], {}, [])
+	assert_int(net.owned_junctions().size()).is_equal(0)
+	assert_float(net.trim_at(1, 1, true)).is_equal_approx(0.0, 0.001)
+
+
+# ─── Visual regressions reported in-game ────────────────────────────────────
+
+func test_stop_bar_runs_across_the_road_not_along_it() -> void:
+	# REGRESSION ("markings at 90 degrees"): the bar was built from the road's
+	# CENTRE POINT to one edge, instead of from the centreline across to the
+	# kerb. For any real (non-zero-width) road that put it half off-centre, so
+	# it read as a perpendicular stub rather than a stop line.
+	#
+	# A stop bar must be much wider ACROSS the carriageway than it is deep ALONG
+	# the direction of travel.
+	var fx := _priority_crossing()
+	var junction: RoadJunctionSolver.Junction = \
+		(fx["net"] as RoadNetworkContext).owned_junctions()[0]
+	var mi := OSMJunctionBuilder.new().build_junction(junction)
+	assert_object(mi).is_not_null()
+	if mi == null:
+		return
+	# Bars used to be matched to arms by index, on the assumption that bar i
+	# belongs to arm i. That held only while every arm was painted; now that just
+	# the yielding arms are, the nth bar is not the nth arm and the extents came
+	# out measured against a perpendicular road.
+	var results := _marking_extents(junction, mi)
+	mi.free()
+
+	assert_int(results.size()) \
+		.override_failure_message("expected a marking surface").is_greater(0)
+	for r: Dictionary in results:
+		assert_float(r["span"]) \
+			.override_failure_message(
+				"stop bar must span across the road (span %.2f vs depth %.2f)"
+				% [r["span"], r["depth"]]) \
+			.is_greater(float(r["depth"]) * 2.0)
+
+
+func test_stop_bar_sits_on_the_approaching_half_of_the_carriageway() -> void:
+	# REGRESSION (spotted on a Dutch map): the bar was painted across the lane
+	# LEAVING the junction rather than the one approaching it.
+	#
+	# Arm.dir points AWAY from the junction and lateral_at is the right-hand side
+	# of THAT direction, but traffic arriving travels along -dir. So the
+	# approaching driver's half is the arm's NEGATIVE lateral. The old code used
+	# +lateral, having reasoned "looking outward, the approach is on the right" —
+	# which inverts the frame, since looking outward you face the oncoming
+	# traffic.
+	#
+	# Asserting on the SIGN of the lateral extent is the only thing that catches
+	# this. A bar on the wrong half, and one spanning the full width, both give
+	# an identical span and an identical depth to a correct one.
+	var fx := _priority_crossing()
+	var junction: RoadJunctionSolver.Junction = \
+		(fx["net"] as RoadNetworkContext).owned_junctions()[0]
+	var mi := OSMJunctionBuilder.new().build_junction(junction)
+	assert_object(mi).is_not_null()
+	if mi == null:
+		return
+	var results := _marking_extents(junction, mi)
+	mi.free()
+
+	assert_int(results.size()).is_greater(0)
+	for r: Dictionary in results:
+		# The whole bar lies on the -lateral side: it runs from the centreline
+		# (0) out to the negative kerb. The small epsilon allows for the
+		# centreline vertices themselves.
+		assert_float(r["lat_max"]) \
+			.override_failure_message(
+				"bar crosses onto the ONCOMING half (lat range %.2f..%.2f)"
+				% [r["lat_min"], r["lat_max"]]) \
+			.is_less(0.01)
+		assert_float(r["lat_min"]) \
+			.override_failure_message(
+				"bar must actually span the approach half, got %.2f" % r["lat_min"]) \
+			.is_less(-0.5)
+
+
+func test_left_hand_traffic_mirrors_the_stop_bar() -> void:
+	# The same junction in a left-hand-traffic country must put the bar on the
+	# OTHER half. Without this, the fix above is just a hardcoded sign flip that
+	# trades one wrong set of countries for another.
+	var fx := _priority_crossing()
+	var junction: RoadJunctionSolver.Junction = \
+		(fx["net"] as RoadNetworkContext).owned_junctions()[0]
+	var builder := OSMJunctionBuilder.new()
+	builder.region = RoadRegion.for_style(
+		RoadRegion.DrivingSide.LEFT, RoadRegion.GiveWayStyle.DASHED)
+	var mi := builder.build_junction(junction)
+	assert_object(mi).is_not_null()
+	if mi == null:
+		return
+	var results := _marking_extents(junction, mi)
+	mi.free()
+
+	assert_int(results.size()).is_greater(0)
+	for r: Dictionary in results:
+		assert_float(r["lat_min"]) \
+			.override_failure_message(
+				"left-hand traffic bar crosses onto the oncoming half (%.2f..%.2f)"
+				% [r["lat_min"], r["lat_max"]]) \
+			.is_greater(-0.01)
+		assert_float(r["lat_max"]).is_greater(0.5)
+
+
+# ─── Junction priority ───────────────────────────────────────────────────────
+
+func test_equal_class_crossing_gets_no_markings() -> void:
+	# REGRESSION ("ring of white blocks"): every arm of every junction was
+	# painted with a stop bar regardless of priority, so a plain residential
+	# crossing read as a controlled intersection with four stop lines.
+	#
+	# An unsignposted crossing of two equal streets is governed by
+	# priority-to-the-right (voorrang van rechts in NL) — an unmarked rule. The
+	# correct amount of paint there is none.
+	var fx := _crossing()
+	var junction: RoadJunctionSolver.Junction = \
+		(fx["net"] as RoadNetworkContext).owned_junctions()[0]
+	var mi := OSMJunctionBuilder.new().build_junction(junction)
+	assert_object(mi).is_not_null()
+	if mi == null:
+		return
+	var surfaces := mi.mesh.get_surface_count()
+	mi.free()
+	# Surface 0 is the asphalt cap; a marking surface would be surface 1.
+	assert_int(surfaces) \
+		.override_failure_message(
+			"an equal-class crossing must paint no give-way markings") \
+		.is_equal(1)
+
+
+func test_only_the_minor_road_is_marked() -> void:
+	# A residential meeting a primary yields to it. Only the residential's two
+	# arms may carry markings — painting the primary too would instruct the
+	# driver who has priority to give way.
+	var fx := _priority_crossing()
+	var junction: RoadJunctionSolver.Junction = \
+		(fx["net"] as RoadNetworkContext).owned_junctions()[0]
+	var mi := OSMJunctionBuilder.new().build_junction(junction)
+	assert_object(mi).is_not_null()
+	if mi == null:
+		return
+	var results := _marking_extents(junction, mi)
+	mi.free()
+
+	assert_int(results.size()) \
+		.override_failure_message("the minor road's two arms must be marked") \
+		.is_equal(2)
+	for r: Dictionary in results:
+		assert_str(r["highway"]) \
+			.override_failure_message(
+				"the priority road must not be marked, but arm %d (%s) was"
+				% [r["arm"], r["highway"]]) \
+			.is_equal("residential")
+
+
+# ─── Shark's teeth (NL/BE) ───────────────────────────────────────────────────
+
+func test_dutch_junction_paints_shark_teeth_pointing_at_the_driver() -> void:
+	# In the Netherlands a give-way is marked with haaientanden: triangles whose
+	# apexes point back at the driver who must yield. The direction the point
+	# faces IS the instruction, so an apex on the wrong end reverses the meaning
+	# — and a backwards row still renders and still looks plausible, which is
+	# why this has to be asserted rather than eyeballed.
+	var fx := _priority_crossing()
+	var junction: RoadJunctionSolver.Junction = \
+		(fx["net"] as RoadNetworkContext).owned_junctions()[0]
+	var builder := OSMJunctionBuilder.new()
+	builder.region = RoadRegion.for_style(
+		RoadRegion.DrivingSide.RIGHT, RoadRegion.GiveWayStyle.SHARK_TEETH)
+	var mi := builder.build_junction(junction)
+	assert_object(mi).is_not_null()
+	if mi == null:
+		return
+
+	var mdt := MeshDataTool.new()
+	var ok := mi.mesh.get_surface_count() >= 2 \
+		and mdt.create_from_surface(mi.mesh, 1) == OK
+	var teeth := 0
+	var wrong_way := 0
+	if ok:
+		for f: int in range(mdt.get_face_count()):
+			var v: Array[Vector3] = []
+			for k: int in range(3):
+				v.append(mdt.get_vertex(mdt.get_face_vertex(f, k)))
+			# Which arm this tooth belongs to, so "away from the junction" is
+			# measured along the right road.
+			var centroid := (v[0] + v[1] + v[2]) / 3.0
+			var best: RoadJunctionSolver.Arm = null
+			var best_d := INF
+			for arm: RoadJunctionSolver.Arm in junction.arms:
+				var c := arm.point_at(junction.center, arm.trim - 0.5)
+				var d := Vector2(centroid.x - c.x, centroid.z - c.z).length_squared()
+				if d < best_d:
+					best_d = d
+					best = arm
+			if best == null:
+				continue
+			var fwd := best.dir_at(best.trim - 0.5)
+			var c0 := best.point_at(junction.center, best.trim - 0.5)
+			# Along-road offset of each corner. A triangle has one lone extreme
+			# (the apex) and two corners sharing the other end (the base), so the
+			# apex is identifiable from the offsets alone.
+			var offs: Array[float] = []
+			for p: Vector3 in v:
+				offs.append(Vector3(p.x - c0.x, 0.0, p.z - c0.z).dot(fwd))
+			offs.sort()
+			teeth += 1
+			# The apex points AWAY from the junction (at the approaching driver),
+			# so the two base corners are the ones nearest it: the gap between
+			# the lowest two offsets must be smaller than the gap up to the top.
+			var base_spread: float = absf(offs[1] - offs[0])
+			var apex_gap: float = absf(offs[2] - offs[1])
+			if not (base_spread < apex_gap):
+				wrong_way += 1
+	mi.free()
+
+	assert_bool(ok).override_failure_message("expected a marking surface").is_true()
+	assert_int(teeth) \
+		.override_failure_message("expected a row of shark's teeth") \
+		.is_greater(3)
+	assert_int(wrong_way) \
+		.override_failure_message(
+			"%d of %d teeth point the wrong way (apex must face the driver)"
+			% [wrong_way, teeth]) \
+		.is_equal(0)
+
+
+func test_shark_teeth_faces_point_upward() -> void:
+	# Teeth are built from a direction vector whose handedness flips with the
+	# driving side, so their three corners can arrive in either winding order.
+	# Without normalisation half of them would be backface-culled and invisible —
+	# the same class of bug that once made the whole cap disappear.
+	for side: int in [RoadRegion.DrivingSide.RIGHT, RoadRegion.DrivingSide.LEFT]:
+		var fx := _priority_crossing()
+		var junction: RoadJunctionSolver.Junction = \
+			(fx["net"] as RoadNetworkContext).owned_junctions()[0]
+		var builder := OSMJunctionBuilder.new()
+		builder.region = RoadRegion.for_style(
+			side, RoadRegion.GiveWayStyle.SHARK_TEETH)
+		var mi := builder.build_junction(junction)
+		if mi == null:
+			fail("expected a junction mesh")
+			continue
+		var mdt := MeshDataTool.new()
+		var ok := mi.mesh.get_surface_count() >= 2 \
+			and mdt.create_from_surface(mi.mesh, 1) == OK
+		var down := 0
+		if ok:
+			for f: int in range(mdt.get_face_count()):
+				var a := mdt.get_vertex(mdt.get_face_vertex(f, 0))
+				var b := mdt.get_vertex(mdt.get_face_vertex(f, 1))
+				var c := mdt.get_vertex(mdt.get_face_vertex(f, 2))
+				if Plane(a, b, c).normal.y <= 0.0:
+					down += 1
+		mi.free()
+		assert_bool(ok).is_true()
+		assert_int(down) \
+			.override_failure_message(
+				"%d tooth faces point DOWN (driving side %d)" % [down, side]) \
+			.is_equal(0)
+
+
+func test_short_connector_road_survives_trimming() -> void:
+	# REGRESSION ("streets no longer connect"): a short way between two close
+	# junctions was asked to give up more length than it had, so it vanished
+	# entirely and left a visible hole in the network.
+	var data := OSMParser.OSMData.new()
+	# Junctions at (0,0) and (6,0) — a 6 m connector between two crossings.
+	data.nodes = {
+		1: _node(1, 0.0, 0.0), 2: _node(2, 6.0, 0.0),
+		3: _node(3, 0.0, -40.0), 4: _node(4, 0.0, 40.0),
+		5: _node(5, 6.0, -40.0), 6: _node(6, 6.0, 40.0),
+	}
+	data.ways = {
+		1: _way(1, [1, 2], {"highway": "residential"}),   # the short connector
+		2: _way(2, [3, 1, 4], {"highway": "residential"}),
+		3: _way(3, [5, 2, 6], {"highway": "residential"}),
+	}
+	var ways: Array = [data.ways[1], data.ways[2], data.ways[3]]
+	var builder := OSMWayBuilder.new()
+	builder.network = RoadNetworkContext.build(ways, ways, data.nodes, [])
+
+	var mi := builder.build_road(data.ways[1], data)
+	assert_object(mi) \
+		.override_failure_message("a short connector must not vanish entirely") \
+		.is_not_null()
+	if mi == null:
+		return
+	var b := _bounds_of_mesh(mi.mesh)
+	mi.free()
+	var remaining: float = b["max_x"] - b["min_x"]
+	assert_float(remaining) \
+		.override_failure_message(
+			"connector kept only %.2f m of its 6 m" % remaining) \
+		.is_greater(1.0)
+
+
+func test_a_road_of_useful_length_survives_trimming() -> void:
+	# The general invariant behind the fix above: whatever the junctions ask
+	# for, a road long enough to be worth seeing must keep a usable fraction of
+	# its own length rather than being trimmed out of existence.
+	var data := OSMParser.OSMData.new()
+	data.nodes = {
+		1: _node(1, 0.0, 0.0), 2: _node(2, 14.0, 0.0),
+		3: _node(3, 0.0, -40.0), 4: _node(4, 0.0, 40.0),
+		5: _node(5, 14.0, -40.0), 6: _node(6, 14.0, 40.0),
+	}
+	data.ways = {
+		1: _way(1, [1, 2], {"highway": "primary", "lanes": "4"}),
+		2: _way(2, [3, 1, 4], {"highway": "primary", "lanes": "4"}),
+		3: _way(3, [5, 2, 6], {"highway": "primary", "lanes": "4"}),
+	}
+	var ways: Array = [data.ways[1], data.ways[2], data.ways[3]]
+	var builder := OSMWayBuilder.new()
+	builder.network = RoadNetworkContext.build(ways, ways, data.nodes, [])
+	var mi := builder.build_road(data.ways[1], data)
+	assert_object(mi) \
+		.override_failure_message(
+			"a 14 m road between two wide junctions must survive") \
+		.is_not_null()
+	if mi != null:
+		mi.free()
+
+
+func test_sub_metre_stub_between_junctions_is_dropped() -> void:
+	# The opposite end of the same trade-off. Junctions often sit a metre or two
+	# apart in OSM; the stub between them contributes no visible carriageway
+	# once both caps are drawn, but it DOES emit a full kerb run with end caps,
+	# which appears as a detached slab of pavement floating beside the road.
+	var data := OSMParser.OSMData.new()
+	data.nodes = {
+		1: _node(1, 0.0, 0.0), 2: _node(2, 1.0, 0.0),
+		3: _node(3, 0.0, -40.0), 4: _node(4, 0.0, 40.0),
+		5: _node(5, 1.0, -40.0), 6: _node(6, 1.0, 40.0),
+	}
+	data.ways = {
+		1: _way(1, [1, 2], {"highway": "residential", "sidewalk": "both"}),
+		2: _way(2, [3, 1, 4], {"highway": "residential"}),
+		3: _way(3, [5, 2, 6], {"highway": "residential"}),
+	}
+	var ways: Array = [data.ways[1], data.ways[2], data.ways[3]]
+	var builder := OSMWayBuilder.new()
+	builder.network = RoadNetworkContext.build(ways, ways, data.nodes, [])
+	var mi := builder.build_road(data.ways[1], data)
+	# Decide BEFORE freeing. A freed Object still compares equal to null in
+	# GDScript, so asserting on the variable afterwards passes whether or not a
+	# mesh was ever built — the assertion would be vacuous.
+	var was_built := mi != null
+	if mi != null:
+		mi.free()
+	assert_bool(was_built) \
+		.override_failure_message(
+			"a 1 m stub must not emit a floating kerb slab") \
+		.is_false()
+
+
+func test_ribbon_mouth_meets_the_cap_on_a_road_that_bends() -> void:
+	# REGRESSION (screenshot: "the street ends at a different angle than the
+	# intersection polygon"). The solver placed the cap mouth by walking a
+	# STRAIGHT RAY from the junction node; OSMWayBuilder cuts the ribbon by ARC
+	# LENGTH along the way's real polyline. On a road that bends within its own
+	# trim distance those are different points on different segments, so the cap
+	# was cut at one angle and the ribbon at another — leaving a wedge of bare
+	# ground on one side and a jutting corner on the other.
+	#
+	# This is an END-TO-END test on purpose: it compares the cap polygon against
+	# the vertices of the ribbon mesh that is actually built. The solver-level
+	# test of the same bug can only check the solver against itself.
+	var data := OSMParser.OSMData.new()
+	data.nodes = {
+		1: _node(1, -60.0, 0.0),
+		2: _node(2, 0.0, 0.0),        # the junction
+		3: _node(3, 60.0, 0.0),
+		# Stem leaving south, bending south-east after only 3 m — inside the trim.
+		10: _node(10, 0.0, 3.0),
+		11: _node(11, 8.0, 20.0),
+		12: _node(12, 20.0, 60.0),
+	}
+	data.ways = {
+		1: _way(1, [1, 2, 3], {"highway": "primary"}),
+		2: _way(2, [2, 10, 11, 12], {"highway": "primary"}),
+	}
+	var ways: Array = [data.ways[1], data.ways[2]]
+	var net := RoadNetworkContext.build(ways, ways, data.nodes, [])
+	var junction: RoadJunctionSolver.Junction = net.junction_at(2)
+	assert_object(junction).is_not_null()
+	if junction == null:
+		return
+
+	var stem: RoadJunctionSolver.Arm = null
+	for arm: RoadJunctionSolver.Arm in junction.arms:
+		if arm.way_id == 2:
+			stem = arm
+	assert_object(stem).is_not_null()
+	if stem == null:
+		return
+
+	# Guard: the fixture must actually bend inside the trim, or this test would
+	# pass trivially against the very bug it exists to catch.
+	assert_float(stem.dir_at(stem.trim).dot(stem.dir)) \
+		.override_failure_message("fixture does not bend inside its trim") \
+		.is_less(0.99)
+
+	var builder := OSMWayBuilder.new()
+	builder.network = net
+	var road := builder.build_road(data.ways[2], data)
+	assert_object(road).is_not_null()
+	if road == null:
+		return
+
+	# The ribbon's two starting edge vertices are the mouth it presents to the
+	# junction. Find the mesh vertices closest to where the cap says they are.
+	var cap_mouth := stem.point_at(junction.center, stem.trim)
+	var cap_lat := stem.lateral_at(stem.trim) * stem.half_width
+	var cap_left := Vector2(cap_mouth.x - cap_lat.x, cap_mouth.z - cap_lat.z)
+	var cap_right := Vector2(cap_mouth.x + cap_lat.x, cap_mouth.z + cap_lat.z)
+
+	var best_left := INF
+	var best_right := INF
+	var mdt := MeshDataTool.new()
+	var ok := mdt.create_from_surface(road.mesh, 0) == OK
+	if ok:
+		for vi: int in range(mdt.get_vertex_count()):
+			var v := mdt.get_vertex(vi)
+			var p := Vector2(v.x, v.z)
+			best_left = minf(best_left, p.distance_to(cap_left))
+			best_right = minf(best_right, p.distance_to(cap_right))
+	road.free()
+
+	assert_bool(ok).override_failure_message("expected a road surface").is_true()
+	# Both corners of the cap's mouth must coincide with real ribbon vertices.
+	# Before the fix the mouth was ~1.6 m adrift and 25 degrees out of square.
+	assert_float(best_left) \
+		.override_failure_message(
+			"cap's left mouth corner is %.3f m from the nearest ribbon vertex"
+			% best_left) \
+		.is_less(0.05)
+	assert_float(best_right) \
+		.override_failure_message(
+			"cap's right mouth corner is %.3f m from the nearest ribbon vertex"
+			% best_right) \
+		.is_less(0.05)
+
+
+func test_cap_faces_point_upward() -> void:
+	# REGRESSION: the cap was emitted with its winding inverted, so every face
+	# pointed DOWN and was backface-culled — the intersection was invisible from
+	# above (a grass-coloured hole) even though the mesh was built, present in
+	# the scene, marked visible and correctly positioned. Nothing but looking at
+	# the face normals catches this.
+	var fx := _crossing()
+	var junction: RoadJunctionSolver.Junction = \
+		(fx["net"] as RoadNetworkContext).owned_junctions()[0]
+	var mi := OSMJunctionBuilder.new().build_junction(junction)
+	assert_object(mi).is_not_null()
+	if mi == null:
+		return
+
+	var mdt := MeshDataTool.new()
+	var ok := mdt.create_from_surface(mi.mesh, 0) == OK
+	var up := 0
+	var down := 0
+	if ok:
+		for f: int in range(mdt.get_face_count()):
+			var a := mdt.get_vertex(mdt.get_face_vertex(f, 0))
+			var b := mdt.get_vertex(mdt.get_face_vertex(f, 1))
+			var c := mdt.get_vertex(mdt.get_face_vertex(f, 2))
+			# Godot's front face is the winding normal Plane(a, b, c).normal.
+			if Plane(a, b, c).normal.y > 0.0:
+				up += 1
+			else:
+				down += 1
+	mi.free()
+
+	assert_bool(ok).is_true()
+	assert_int(up).override_failure_message("cap must have faces").is_greater(0)
+	assert_int(down) \
+		.override_failure_message(
+			"%d cap faces point DOWN and will be backface-culled" % down) \
+		.is_equal(0)
+
+
+func test_flat_and_draped_paths_use_opposite_windings() -> void:
+	# The two cap code paths need OPPOSITE input windings to face the same way:
+	# PolygonUtils.emit_terrain_conforming_quad fan-triangulates each clipped
+	# piece as (o, v2, v1), reversing whatever it is handed, while the flat path
+	# emits the order given. Fixing one and assuming the other followed is
+	# exactly how the cap ended up invisible in the DEM-backed world while the
+	# flat unit test passed.
+	var builder := OSMJunctionBuilder.new()
+	var a := Vector3(0.0, 0.0, 0.0)
+	var b := Vector3(10.0, 0.0, 0.0)
+	var c := Vector3(0.0, 0.0, 10.0)
+
+	var up := builder._wound_upward(a, b, c)
+	var down := builder._wound_downward(a, b, c)
+	assert_int(up.size()).is_equal(3)
+	assert_int(down.size()).is_equal(3)
+
+	# The upward winding must yield a +Y front face directly.
+	var up3: Array[Vector3] = []
+	for p: Vector2 in up:
+		up3.append(Vector3(p.x, 0.0, p.y))
+	assert_float(Plane(up3[0], up3[1], up3[2]).normal.y) \
+		.override_failure_message("_wound_upward must give a +Y front face") \
+		.is_greater(0.0)
+
+	# The downward winding must be its exact reverse, so that a consumer which
+	# flips the order (the terrain clipper) ends up facing up.
+	var down3: Array[Vector3] = []
+	for p: Vector2 in down:
+		down3.append(Vector3(p.x, 0.0, p.y))
+	assert_float(Plane(down3[0], down3[1], down3[2]).normal.y) \
+		.override_failure_message(
+			"_wound_downward must be the reverse of _wound_upward") \
+		.is_less(0.0)
+
+
+func test_winding_helper_is_independent_of_input_order() -> void:
+	# The triangulator hands over corners in whatever order it likes, so the
+	# helper must normalise both possible inputs to the same result.
+	var builder := OSMJunctionBuilder.new()
+	var a := Vector3(0.0, 0.0, 0.0)
+	var b := Vector3(10.0, 0.0, 0.0)
+	var c := Vector3(0.0, 0.0, 10.0)
+
+	for tri: Array in [[a, b, c], [a, c, b]]:
+		var w := builder._wound_upward(tri[0], tri[1], tri[2])
+		var v: Array[Vector3] = []
+		for p: Vector2 in w:
+			v.append(Vector3(p.x, 0.0, p.y))
+		assert_float(Plane(v[0], v[1], v[2]).normal.y) \
+			.override_failure_message(
+				"winding must face up regardless of input order") \
+			.is_greater(0.0)

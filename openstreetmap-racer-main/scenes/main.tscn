@@ -1,0 +1,412 @@
+[gd_scene format=3 uid="uid://ismyghiir7xr"]
+
+[ext_resource type="Script" uid="uid://bmi3hy6idhvw7" path="res://scripts/main.gd" id="1_main"]
+[ext_resource type="Script" uid="uid://7keje0ccjo55" path="res://scripts/osm_tile_manager.gd" id="2_tile"]
+[ext_resource type="Script" uid="uid://bh3w0a8jfro5n" path="res://scripts/car_controller.gd" id="3_car"]
+[ext_resource type="PackedScene" uid="uid://bimsfi570iris" path="res://scenes/models/car.blend" id="4_jyhfs"]
+[ext_resource type="Script" uid="uid://dryhfw53b8v1j" path="res://scripts/minimap.gd" id="5_minimap"]
+[ext_resource type="Shader" uid="uid://e0wwtjl6d7by" path="res://scripts/shaders/sky.gdshader" id="6_sky"]
+[ext_resource type="Script" uid="uid://ddmteyeue4py2" path="res://scripts/sky_controller.gd" id="7_skyctl"]
+[ext_resource type="Script" uid="uid://u7vedsmf6r8k" path="res://scripts/headlights.gd" id="8_headlights"]
+[ext_resource type="Script" uid="uid://g842wxutlhd" path="res://scripts/street_lamp_lights.gd" id="9_lamps"]
+[ext_resource type="Script" uid="uid://cyga08n0yiaqs" path="res://scripts/traffic/traffic_manager.gd" id="10_traffic"]
+[ext_resource type="Script" uid="uid://bqgct3l1beqog" path="res://scripts/post_processing.gd" id="11_postfx"]
+[ext_resource type="Script" path="res://scripts/weather_controller.gd" id="12_weather"]
+[ext_resource type="Script" uid="uid://duydbpt17n7om" path="res://scripts/dial_cluster.gd" id="13_cluster"]
+[ext_resource type="Script" uid="uid://bja4t4xylv62m" path="res://scripts/speed_blur.gd" id="14_speedblur"]
+[ext_resource type="Shader" uid="uid://6px6s5m73t2k" path="res://scripts/shaders/speed_blur.gdshader" id="15_blurshader"]
+[ext_resource type="Script" path="res://scripts/top_down_camera.gd" id="16_topdown"]
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_sky"]
+shader = ExtResource("6_sky")
+shader_parameter/zenith_color = Color(0.18, 0.4, 0.72, 1)
+shader_parameter/horizon_color = Color(0.66, 0.78, 0.9, 1)
+shader_parameter/ground_color = Color(0.34, 0.36, 0.38, 1)
+shader_parameter/horizon_falloff = 4.0
+shader_parameter/sun_direction = Vector3(-0.4, -0.82, -0.4)
+shader_parameter/sun_color = Color(1, 0.95, 0.85, 1)
+shader_parameter/sun_size = 0.03
+shader_parameter/sun_glow_size = 0.25
+shader_parameter/sun_energy = 1.0
+shader_parameter/cloud_color = Color(1, 1, 1, 1)
+shader_parameter/cloud_shadow_color = Color(0.62, 0.66, 0.72, 1)
+shader_parameter/cloud_coverage = 0.5
+shader_parameter/cloud_softness = 0.25
+shader_parameter/cloud_scale = 2.0
+shader_parameter/cloud_wind = Vector2(0.01, 0.006)
+shader_parameter/cloud_opacity = 1.0
+
+[sub_resource type="ShaderMaterial" id="ShaderMaterial_speedblur"]
+shader = ExtResource("15_blurshader")
+shader_parameter/strength = 0.0
+shader_parameter/clear_radius = 0.18
+shader_parameter/max_blur = 0.035
+shader_parameter/focal_point = Vector2(0.5, 0.5)
+
+[sub_resource type="Sky" id="Sky_main"]
+sky_material = SubResource("ShaderMaterial_sky")
+
+[sub_resource type="Environment" id="Environment_main"]
+background_mode = 2
+sky = SubResource("Sky_main")
+ambient_light_source = 2
+ambient_light_color = Color(0.6, 0.65, 0.7, 1)
+ambient_light_energy = 0.5
+tonemap_mode = 3
+ssr_enabled = true
+ssao_enabled = true
+ssil_enabled = true
+glow_enabled = true
+glow_intensity = 0.8
+glow_bloom = 0.05
+fog_enabled = true
+fog_light_color = Color(0.7, 0.75, 0.8, 1)
+fog_density = 0.002
+fog_aerial_perspective = 0.5
+adjustment_enabled = true
+adjustment_contrast = 1.05
+adjustment_saturation = 1.12
+
+[sub_resource type="CameraAttributesPractical" id="CamAttrs_dof"]
+dof_blur_far_enabled = true
+dof_blur_far_distance = 180.0
+dof_blur_far_transition = 220.0
+dof_blur_amount = 0.1
+
+[sub_resource type="StandardMaterial3D" id="Material_lamp"]
+albedo_color = Color(0, 0, 0, 1)
+emission_enabled = true
+emission = Color(1, 0.95, 0.8, 1)
+emission_energy_multiplier = 0.0
+
+[sub_resource type="BoxMesh" id="BoxMesh_lamp"]
+material = SubResource("Material_lamp")
+size = Vector3(0.28, 0.16, 0.06)
+
+[sub_resource type="BoxShape3D" id="BoxShape_car"]
+size = Vector3(1.8, 1, 4.1)
+
+[node name="Main" type="Node3D" unique_id=923917518]
+script = ExtResource("1_main")
+
+[node name="WorldEnvironment" type="WorldEnvironment" parent="." unique_id=1583928160]
+environment = SubResource("Environment_main")
+
+[node name="DirectionalLight3D" type="DirectionalLight3D" parent="." unique_id=382649534]
+transform = Transform3D(0.86582, -0.353805, 0.353805, 0, 0.707107, 0.707107, -0.500356, -0.612227, 0.612227, 0, 50, 0)
+shadow_enabled = true
+shadow_bias = 0.05
+shadow_normal_bias = 1.5
+directional_shadow_split_1 = 0.06
+directional_shadow_split_2 = 0.16
+directional_shadow_split_3 = 0.4
+directional_shadow_blend_splits = true
+directional_shadow_fade_start = 0.85
+directional_shadow_max_distance = 250.0
+
+[node name="SkyController" type="Node" parent="." unique_id=1042673341]
+script = ExtResource("7_skyctl")
+world_environment_path = NodePath("../WorldEnvironment")
+sun_light_path = NodePath("../DirectionalLight3D")
+
+[node name="PostProcessing" type="Node" parent="." unique_id=1042673344]
+script = ExtResource("11_postfx")
+world_environment_path = NodePath("../WorldEnvironment")
+sky_controller_path = NodePath("../SkyController")
+camera_path = NodePath("../Car/CameraPivot/Camera3D")
+
+[node name="WeatherController" type="Node" parent="." unique_id=1042673345]
+script = ExtResource("12_weather")
+start_wet = false
+
+[node name="StreetLampLights" type="Node" parent="." unique_id=1042673342]
+script = ExtResource("9_lamps")
+
+[node name="OSMTileManager" type="Node3D" parent="." unique_id=1042673340]
+script = ExtResource("2_tile")
+street_lamp_lights_path = NodePath("../StreetLampLights")
+
+[node name="TrafficManager" type="Node3D" parent="." unique_id=1042673343]
+script = ExtResource("10_traffic")
+car_path = NodePath("../Car")
+tile_manager_path = NodePath("../OSMTileManager")
+
+[node name="Car" type="VehicleBody3D" parent="." unique_id=1077184071]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 1.2, 0)
+mass = 1200.0
+continuous_cd = true
+script = ExtResource("3_car")
+
+[node name="CarMesh" parent="Car" unique_id=1017002161 instance=ExtResource("4_jyhfs")]
+transform = Transform3D(0.59999996, 0, 0, 0, 0.59999996, 0, 0, 0, 0.59999996, 0, 0.5864136, 0)
+
+[node name="Headlights" type="Node3D" parent="Car" unique_id=300200001]
+script = ExtResource("8_headlights")
+
+[node name="LeftBeam" type="SpotLight3D" parent="Car/Headlights" unique_id=300200002]
+transform = Transform3D(-1, 0, 0, 0, 0.978148, 0.207912, 0, 0.207912, -0.978148, 0.62, 0.55, 2.05)
+visible = false
+light_color = Color(1, 0.96, 0.85, 1)
+light_energy = 0.0
+shadow_enabled = true
+spot_range = 35.0
+spot_angle = 28.0
+spot_angle_attenuation = 1.2
+
+[node name="RightBeam" type="SpotLight3D" parent="Car/Headlights" unique_id=300200003]
+transform = Transform3D(-1, 0, 0, 0, 0.978148, 0.207912, 0, 0.207912, -0.978148, -0.62, 0.55, 2.05)
+visible = false
+light_color = Color(1, 0.96, 0.85, 1)
+light_energy = 0.0
+shadow_enabled = true
+spot_range = 35.0
+spot_angle = 28.0
+spot_angle_attenuation = 1.2
+
+[node name="LeftLamp" type="MeshInstance3D" parent="Car/Headlights" unique_id=300200004]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.62, 0.55, 2)
+mesh = SubResource("BoxMesh_lamp")
+
+[node name="RightLamp" type="MeshInstance3D" parent="Car/Headlights" unique_id=300200005]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.62, 0.55, 2)
+mesh = SubResource("BoxMesh_lamp")
+
+[node name="CollisionShape3D" type="CollisionShape3D" parent="Car" unique_id=2096323148]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0, 0.82, 0)
+shape = SubResource("BoxShape_car")
+
+[node name="FrontLeftWheel" type="VehicleWheel3D" parent="Car" unique_id=731367247]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.83, 0.321, 1.234)
+
+[node name="FrontRightWheel" type="VehicleWheel3D" parent="Car" unique_id=1770267164]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.83, 0.321, 1.234)
+
+[node name="RearLeftWheel" type="VehicleWheel3D" parent="Car" unique_id=190474951]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, 0.802, 0.327, -1.353)
+
+[node name="RearRightWheel" type="VehicleWheel3D" parent="Car" unique_id=488486566]
+transform = Transform3D(1, 0, 0, 0, 1, 0, 0, 0, 1, -0.8, 0.327, -1.353)
+
+[node name="CameraPivot" type="Node3D" parent="Car" unique_id=951089476]
+transform = Transform3D(-1, 0, -8.742278e-08, 0, 1, 0, 8.742278e-08, 0, -1, 0, 2, 0)
+
+[node name="Camera3D" type="Camera3D" parent="Car/CameraPivot" unique_id=674512223]
+transform = Transform3D(1, 0, 0, 0, 0.966, 0.259, 0, -0.259, 0.966, 0, 3, 8)
+attributes = SubResource("CamAttrs_dof")
+fov = 70.0
+far = 2000.0
+
+[node name="IsometricCamera" type="Camera3D" parent="." unique_id=674512224]
+script = ExtResource("16_topdown")
+target_path = NodePath("../Car")
+yaw_degrees = 45.0
+pitch_degrees = 35.264
+follow_heading = false
+ortho_size = 40.0
+projection = 1
+size = 40.0
+far = 2000.0
+current = false
+
+[node name="TopDownCamera" type="Camera3D" parent="." unique_id=674512225]
+script = ExtResource("16_topdown")
+target_path = NodePath("../Car")
+yaw_degrees = 0.0
+pitch_degrees = 90.0
+follow_heading = true
+ortho_size = 60.0
+projection = 1
+size = 60.0
+far = 2000.0
+current = false
+
+[node name="SpeedBlurLayer" type="CanvasLayer" parent="." unique_id=153076500]
+layer = 0
+
+[node name="SpeedBlur" type="ColorRect" parent="SpeedBlurLayer" unique_id=153076501]
+material = SubResource("ShaderMaterial_speedblur")
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+mouse_filter = 2
+script = ExtResource("14_speedblur")
+
+[node name="HUD" type="CanvasLayer" parent="." unique_id=153076246]
+layer = 1
+
+[node name="DialCluster" type="Control" parent="HUD" unique_id=153076247]
+layout_mode = 3
+anchors_preset = 2
+anchor_top = 1.0
+anchor_bottom = 1.0
+offset_left = 24.0
+offset_top = -252.0
+offset_right = 252.0
+offset_bottom = -24.0
+grow_vertical = 0
+mouse_filter = 2
+script = ExtResource("13_cluster")
+
+[node name="InfoLabel" type="Label" parent="HUD" unique_id=281558808]
+offset_left = 20.0
+offset_top = 60.0
+offset_right = 500.0
+offset_bottom = 90.0
+theme_override_font_sizes/font_size = 16
+text = "Loading..."
+
+[node name="KudosLabel" type="Label" parent="HUD" unique_id=153076300]
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -200.0
+offset_top = 16.0
+offset_right = 200.0
+offset_bottom = 70.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(1, 0.85, 0.2, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 6
+theme_override_font_sizes/font_size = 40
+text = "KUDOS 0"
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="ComboLabel" type="Label" parent="HUD" unique_id=153076301]
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -200.0
+offset_top = 62.0
+offset_right = 200.0
+offset_bottom = 92.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(1, 0.55, 0.1, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 4
+theme_override_font_sizes/font_size = 22
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="KudosPopup" type="Label" parent="HUD" unique_id=153076302]
+modulate = Color(1, 1, 1, 0)
+anchors_preset = 5
+anchor_left = 0.5
+anchor_right = 0.5
+offset_left = -300.0
+offset_top = 120.0
+offset_right = 300.0
+offset_bottom = 180.0
+grow_horizontal = 2
+theme_override_colors/font_color = Color(1, 1, 1, 1)
+theme_override_colors/font_outline_color = Color(0, 0, 0, 1)
+theme_override_constants/outline_size = 6
+theme_override_font_sizes/font_size = 44
+horizontal_alignment = 1
+vertical_alignment = 1
+
+[node name="Minimap" type="Control" parent="HUD" unique_id=150620465]
+layout_mode = 3
+anchors_preset = 3
+anchor_left = 1.0
+anchor_top = 1.0
+anchor_right = 1.0
+anchor_bottom = 1.0
+offset_left = -220.0
+offset_top = -220.0
+offset_right = -10.0
+offset_bottom = -10.0
+grow_horizontal = 0
+grow_vertical = 0
+mouse_filter = 2
+script = ExtResource("5_minimap")
+car_node_path = NodePath("../../Car")
+tile_manager_node_path = NodePath("../../OSMTileManager")
+
+[node name="PauseMenu" type="CanvasLayer" parent="." unique_id=300100001]
+process_mode = 3
+layer = 10
+visible = false
+
+[node name="Dimmer" type="ColorRect" parent="PauseMenu" unique_id=300100002]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+color = Color(0, 0, 0, 0.5)
+
+[node name="CenterContainer" type="CenterContainer" parent="PauseMenu" unique_id=300100003]
+anchors_preset = 15
+anchor_right = 1.0
+anchor_bottom = 1.0
+grow_horizontal = 2
+grow_vertical = 2
+
+[node name="Panel" type="VBoxContainer" parent="PauseMenu/CenterContainer" unique_id=300100004]
+custom_minimum_size = Vector2(280, 0)
+layout_mode = 2
+theme_override_constants/separation = 16
+
+[node name="Title" type="Label" parent="PauseMenu/CenterContainer/Panel" unique_id=300100005]
+layout_mode = 2
+theme_override_font_sizes/font_size = 40
+text = "Paused"
+horizontal_alignment = 1
+
+[node name="DayNightToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel" unique_id=300100008]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+button_pressed = true
+text = "Daytime"
+
+[node name="DebugLabelsToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel" unique_id=300100009]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Debug Labels"
+
+[node name="WetWeatherToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel" unique_id=300100010]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Wet Weather"
+
+[node name="SpeedBlurToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel" unique_id=300100014]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Speed Blur"
+
+[node name="DrivingAssistsToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel" unique_id=300100015]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Driving Assists"
+
+[node name="FrameTracerToggle" type="CheckButton" parent="PauseMenu/CenterContainer/Panel" unique_id=300100011]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Frame Tracer"
+
+[node name="DumpFrameTimesButton" type="Button" parent="PauseMenu/CenterContainer/Panel" unique_id=300100012]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Dump Frame Times"
+
+[node name="ResumeButton" type="Button" parent="PauseMenu/CenterContainer/Panel" unique_id=300100006]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Resume"
+
+[node name="QuitButton" type="Button" parent="PauseMenu/CenterContainer/Panel" unique_id=300100007]
+custom_minimum_size = Vector2(0, 48)
+layout_mode = 2
+theme_override_font_sizes/font_size = 22
+text = "Quit"

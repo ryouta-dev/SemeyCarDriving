@@ -1,0 +1,12 @@
+# Godot-specific ignores
+.godot/
+*.translation
+
+# OS / Editor ignores
+.DS_Store
+Thumbs.db
+*.tmp
+*.log
+
+# Export credentials
+export_credentials.cfg
