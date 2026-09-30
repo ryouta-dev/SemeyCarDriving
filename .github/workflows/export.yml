@@ -39,17 +39,15 @@ jobs:
           echo "Detected Java Home: $JAVA_PATH"
 
           mkdir -p ~/.config/godot
-          cat << EOF > ~/.config/godot/editor_settings-4.tres
-[gd_resource type="EditorSettings" format=3]
-
-[resource]
-export/android/android_sdk_path = "$ANDROID_PATH"
-export/android/java_sdk_path = "$JAVA_PATH"
-export/android/debug_keystore = "$KEYSTORE_PATH"
-export/android/debug_keystore_user = "androiddebugkey"
-export/android/debug_keystore_pass = "android"
-export/android/force_system_user = false
-EOF
+          echo '[gd_resource type="EditorSettings" format=3]' > ~/.config/godot/editor_settings-4.tres
+          echo '' >> ~/.config/godot/editor_settings-4.tres
+          echo '[resource]' >> ~/.config/godot/editor_settings-4.tres
+          echo "export/android/android_sdk_path = \"$ANDROID_PATH\"" >> ~/.config/godot/editor_settings-4.tres
+          echo "export/android/java_sdk_path = \"$JAVA_PATH\"" >> ~/.config/godot/editor_settings-4.tres
+          echo "export/android/debug_keystore = \"$KEYSTORE_PATH\"" >> ~/.config/godot/editor_settings-4.tres
+          echo 'export/android/debug_keystore_user = "androiddebugkey"' >> ~/.config/godot/editor_settings-4.tres
+          echo 'export/android/debug_keystore_pass = "android"' >> ~/.config/godot/editor_settings-4.tres
+          echo 'export/android/force_system_user = false' >> ~/.config/godot/editor_settings-4.tres
 
           cp ~/.config/godot/editor_settings-4.tres ~/.config/godot/editor_settings-4.7.tres
           cp ~/.config/godot/editor_settings-4.tres ~/.config/godot/editor_settings-4.3.tres
@@ -67,7 +65,7 @@ EOF
 
   export-ios:
     name: "Export iOS Project"
-    runs-on: macos-14
+    runs-on: macos-latest
     steps:
       - name: "Checkout code"
         uses: actions/checkout@v4
