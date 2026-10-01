@@ -13,6 +13,9 @@ const VehicleTuningApplicatorClass = preload("res://scripts/tuning/vehicle_tunin
 @export var mobile_controls: CanvasLayer # MobileControls
 
 func _ready() -> void:
+	if OS.has_feature("mobile"):
+		DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR_LANDSCAPE)
+
 	# Keep running even if tree pauses
 	process_mode = Node.PROCESS_MODE_ALWAYS
 	

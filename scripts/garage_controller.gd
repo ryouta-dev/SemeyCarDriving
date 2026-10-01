@@ -11,6 +11,9 @@ const VehicleTuningApplicatorClass = preload("res://scripts/tuning/vehicle_tunin
 var _current_profile: Dictionary = {}
 
 func _ready() -> void:
+	if OS.has_feature("mobile"):
+		DisplayServer.screen_set_orientation(DisplayServer.SCREEN_SENSOR_LANDSCAPE)
+
 	# Ensure physics won't cause vehicle to slide or glitch in showroom
 	if is_instance_valid(vehicle):
 		vehicle.freeze = true

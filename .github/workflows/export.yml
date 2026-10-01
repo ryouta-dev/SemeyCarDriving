@@ -172,6 +172,14 @@ jobs:
             echo "Switching Xcode project to Manual signing..."
             sed -i '' 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/' "$PROJ/project.pbxproj" 2>/dev/null || sed -i 's/ProvisioningStyle = Automatic;/ProvisioningStyle = Manual;/' "$PROJ/project.pbxproj"
 
+            echo "Enforcing Landscape-only orientation in Info.plist..."
+            PLIST=$(find . -name "*Info.plist" | head -n 1)
+            if [ -n "$PLIST" ]; then
+              echo "Patching orientation in $PLIST"
+              plutil -replace UISupportedInterfaceOrientations -json '["UIInterfaceOrientationLandscapeLeft","UIInterfaceOrientationLandscapeRight"]' "$PLIST"
+              plutil -replace "UISupportedInterfaceOrientations~ipad" -json '["UIInterfaceOrientationLandscapeLeft","UIInterfaceOrientationLandscapeRight"]' "$PLIST" 2>/dev/null || true
+            fi
+
             echo "Compiling for iOS device (unsigned)..."
             xcodebuild \
               -project "$PROJ" \
