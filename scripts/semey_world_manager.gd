@@ -44,6 +44,15 @@ func _ready() -> void:
 		VehicleTuningApplicatorClass.apply_tuning(vehicle, profile)
 		print("[SemeyWorldManager] Applied tuning profile to vehicle: ", profile.get("engine", {}).get("engine_id", "stock"))
 		
+		# Apply environment (time of day & weather) from profile
+		var env_data: Dictionary = profile.get("environment", {})
+		var is_day_time: bool = env_data.get("time_of_day", "day") == "day"
+		var is_rain: bool = env_data.get("weather", "clear") == "rain"
+		if is_instance_valid(sky_controller):
+			sky_controller.set_day(is_day_time)
+		if is_instance_valid(weather_controller):
+			weather_controller.set_wet(is_rain)
+		
 	if is_instance_valid(tile_manager):
 		var osm_data = tile_manager.get_osm_data()
 		if osm_data != null:

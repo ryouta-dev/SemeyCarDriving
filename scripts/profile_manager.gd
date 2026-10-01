@@ -28,6 +28,18 @@ static func get_default_profile() -> Dictionary:
 			"engine_id": "stock_25",     # "stock_25", "v6_35", "jz_turbo", "v8_beast"
 			"drivetrain": "rwd",         # "rwd", "awd"
 			"final_drive": 3.45          # 2.8 to 4.3
+		},
+		"hud": {
+			"button_scale": 1.0,         # 0.8 to 1.5
+			"steer_mode": "arrows",      # "arrows" or "wheel"
+			"steer_pos_x": 40.0,
+			"steer_pos_y": -40.0,
+			"pedals_pos_x": -40.0,
+			"pedals_pos_y": -40.0
+		},
+		"environment": {
+			"time_of_day": "day",        # "day", "sunset", "night"
+			"weather": "clear"           # "clear", "rain"
 		}
 	}
 
