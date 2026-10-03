@@ -44,6 +44,8 @@ var garage_btn: TouchButton
 var weather_btn: TouchButton
 var sky_btn: TouchButton
 var hud_edit_btn: TouchButton
+var camera_btn: TouchButton
+var seat_adjust_panel: PanelContainer
 
 # HUD Layout Editor UI
 var is_editing_hud: bool = false
@@ -66,6 +68,43 @@ func _ready() -> void:
 	_load_saved_hud_config()
 	_build_ui()
 	_update_visibility()
+	_connect_camera()
+
+func _process(_delta: float) -> void:
+	if not is_instance_valid(camera):
+		var cam := get_viewport().get_camera_3d()
+		if cam is ProVehicleCamera:
+			camera = cam
+			_connect_camera()
+
+func _connect_camera() -> void:
+	if is_instance_valid(camera):
+		if not camera.camera_mode_changed.is_connected(_on_camera_mode_changed):
+			camera.camera_mode_changed.connect(_on_camera_mode_changed)
+		_update_camera_ui()
+
+func _on_camera_button_down() -> void:
+	if is_instance_valid(camera):
+		camera.cycle_camera_mode()
+		_update_camera_ui()
+
+func _on_camera_mode_changed(_mode: int) -> void:
+	_update_camera_ui()
+
+func _update_camera_ui() -> void:
+	if not is_instance_valid(camera) or not is_instance_valid(camera_btn):
+		return
+	match int(camera.current_mode):
+		0:
+			camera_btn.text = "📷 3-Е ЛИЦО"
+		1:
+			camera_btn.text = "📷 ДАЛЕКО"
+		2:
+			camera_btn.text = "📷 САЛОН"
+	camera_btn.queue_redraw()
+	
+	if is_instance_valid(seat_adjust_panel):
+		seat_adjust_panel.visible = (int(camera.current_mode) == 2 and not is_editing_hud)
 
 func _load_saved_hud_config() -> void:
 	var prof := ProfileManager.load_profile()
@@ -286,7 +325,7 @@ func _build_ui() -> void:
 	top_bar.anchor_top = 0.0
 	top_bar.anchor_right = 1.0
 	top_bar.anchor_bottom = 0.0
-	top_bar.offset_left = -380.0
+	top_bar.offset_left = -520.0
 	top_bar.offset_top = 24.0
 	top_bar.offset_right = -30.0
 	top_bar.offset_bottom = 90.0
@@ -296,14 +335,25 @@ func _build_ui() -> void:
 	var top_hbox := HBoxContainer.new()
 	top_hbox.set_anchors_preset(Control.PRESET_FULL_RECT)
 	top_hbox.alignment = BoxContainer.ALIGNMENT_END
-	top_hbox.add_theme_constant_override("separation", 12)
+	top_hbox.add_theme_constant_override("separation", 10)
 	top_bar.add_child(top_hbox)
+
+	camera_btn = TouchButton.new()
+	camera_btn.name = "CameraToggle"
+	camera_btn.text = "📷 3-Е ЛИЦО"
+	camera_btn.font_size = 13
+	camera_btn.custom_minimum_size = Vector2(105, 52)
+	camera_btn.corner_radius = 14.0
+	camera_btn.base_color = Color(0.16, 0.22, 0.34, 0.85)
+	camera_btn.border_color = Color(0.4, 0.7, 1.0, 0.75)
+	camera_btn.button_down.connect(_on_camera_button_down)
+	top_hbox.add_child(camera_btn)
 
 	hud_edit_btn = TouchButton.new()
 	hud_edit_btn.name = "HUDEditBtn"
 	hud_edit_btn.text = "⚙️ КНОПКИ"
 	hud_edit_btn.font_size = 14
-	hud_edit_btn.custom_minimum_size = Vector2(110, 52)
+	hud_edit_btn.custom_minimum_size = Vector2(105, 52)
 	hud_edit_btn.corner_radius = 14.0
 	hud_edit_btn.base_color = Color(0.18, 0.22, 0.32, 0.85)
 	hud_edit_btn.border_color = Color(0.5, 0.7, 1.0, 0.75)
@@ -314,7 +364,7 @@ func _build_ui() -> void:
 	weather_btn.name = "WeatherToggle"
 	weather_btn.text = "🌧️ ДОЖДЬ"
 	weather_btn.font_size = 14
-	weather_btn.custom_minimum_size = Vector2(100, 52)
+	weather_btn.custom_minimum_size = Vector2(95, 52)
 	weather_btn.corner_radius = 14.0
 	weather_btn.base_color = Color(0.12, 0.2, 0.3, 0.85)
 	weather_btn.border_color = Color(0.4, 0.65, 0.9, 0.7)
@@ -325,7 +375,7 @@ func _build_ui() -> void:
 	sky_btn.name = "SkyToggle"
 	sky_btn.text = "🌙 НОЧЬ"
 	sky_btn.font_size = 14
-	sky_btn.custom_minimum_size = Vector2(90, 52)
+	sky_btn.custom_minimum_size = Vector2(85, 52)
 	sky_btn.corner_radius = 14.0
 	sky_btn.base_color = Color(0.15, 0.16, 0.28, 0.85)
 	sky_btn.border_color = Color(0.6, 0.5, 0.9, 0.7)
@@ -336,7 +386,7 @@ func _build_ui() -> void:
 	garage_btn.name = "GarageButton"
 	garage_btn.text = "🏠 МЕНЮ"
 	garage_btn.font_size = 14
-	garage_btn.custom_minimum_size = Vector2(90, 52)
+	garage_btn.custom_minimum_size = Vector2(85, 52)
 	garage_btn.corner_radius = 14.0
 	garage_btn.base_color = Color(0.28, 0.14, 0.22, 0.9)
 	garage_btn.border_color = Color(0.9, 0.45, 0.6, 0.85)
@@ -345,6 +395,103 @@ func _build_ui() -> void:
 
 	# Build HUD Editor Overlay Toolbar (hidden by default)
 	_build_hud_editor_toolbar()
+
+	# Build Driver Seat Adjustment Panel for 1st person
+	_build_seat_adjust_panel()
+	_update_camera_ui()
+
+func _build_seat_adjust_panel() -> void:
+	seat_adjust_panel = PanelContainer.new()
+	seat_adjust_panel.name = "SeatAdjustPanel"
+	seat_adjust_panel.set_anchors_preset(Control.PRESET_TOP_RIGHT)
+	seat_adjust_panel.anchor_left = 1.0
+	seat_adjust_panel.anchor_top = 0.0
+	seat_adjust_panel.anchor_right = 1.0
+	seat_adjust_panel.anchor_bottom = 0.0
+	seat_adjust_panel.offset_left = -260.0
+	seat_adjust_panel.offset_top = 86.0
+	seat_adjust_panel.offset_right = -30.0
+	seat_adjust_panel.offset_bottom = 226.0
+	seat_adjust_panel.visible = false
+	
+	var style := StyleBoxFlat.new()
+	style.bg_color = Color(0.08, 0.12, 0.18, 0.90)
+	style.set_corner_radius_all(14)
+	style.border_width_left = 2
+	style.border_width_top = 2
+	style.border_width_right = 2
+	style.border_width_bottom = 2
+	style.border_color = Color(0.25, 0.75, 0.95, 0.7)
+	seat_adjust_panel.add_theme_stylebox_override("panel", style)
+	root_control.add_child(seat_adjust_panel)
+	
+	var vbox := VBoxContainer.new()
+	vbox.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.add_theme_constant_override("separation", 6)
+	seat_adjust_panel.add_child(vbox)
+	
+	var title := Label.new()
+	title.text = "💺 ПОСАДКА ВОДИТЕЛЯ"
+	title.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	title.add_theme_font_size_override("font_size", 13)
+	title.add_theme_color_override("font_color", Color(0.4, 0.85, 1.0))
+	vbox.add_child(title)
+	
+	var h_row := HBoxContainer.new()
+	h_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	h_row.add_theme_constant_override("separation", 6)
+	vbox.add_child(h_row)
+	
+	var h_lbl := Label.new()
+	h_lbl.text = "ВЫСОТА:"
+	h_lbl.custom_minimum_size = Vector2(65, 0)
+	h_lbl.add_theme_font_size_override("font_size", 12)
+	h_row.add_child(h_lbl)
+	
+	var up_btn := Button.new()
+	up_btn.text = "⬆ +"
+	up_btn.custom_minimum_size = Vector2(60, 32)
+	up_btn.pressed.connect(func(): if is_instance_valid(camera): camera.adjust_seat(0.02, 0.0))
+	h_row.add_child(up_btn)
+	
+	var down_btn := Button.new()
+	down_btn.text = "⬇ −"
+	down_btn.custom_minimum_size = Vector2(60, 32)
+	down_btn.pressed.connect(func(): if is_instance_valid(camera): camera.adjust_seat(-0.02, 0.0))
+	h_row.add_child(down_btn)
+	
+	var f_row := HBoxContainer.new()
+	f_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	f_row.add_theme_constant_override("separation", 6)
+	vbox.add_child(f_row)
+	
+	var f_lbl := Label.new()
+	f_lbl.text = "ВЫЛЕТ:"
+	f_lbl.custom_minimum_size = Vector2(65, 0)
+	f_lbl.add_theme_font_size_override("font_size", 12)
+	f_row.add_child(f_lbl)
+	
+	var fwd_btn := Button.new()
+	fwd_btn.text = "◀ +"
+	fwd_btn.custom_minimum_size = Vector2(60, 32)
+	fwd_btn.pressed.connect(func(): if is_instance_valid(camera): camera.adjust_seat(0.0, 0.02))
+	f_row.add_child(fwd_btn)
+	
+	var back_btn := Button.new()
+	back_btn.text = "▶ −"
+	back_btn.custom_minimum_size = Vector2(60, 32)
+	back_btn.pressed.connect(func(): if is_instance_valid(camera): camera.adjust_seat(0.0, -0.02))
+	f_row.add_child(back_btn)
+	
+	var r_row := HBoxContainer.new()
+	r_row.alignment = BoxContainer.ALIGNMENT_CENTER
+	vbox.add_child(r_row)
+	
+	var reset_seat_btn := Button.new()
+	reset_seat_btn.text = "↺ СБРОС"
+	reset_seat_btn.custom_minimum_size = Vector2(100, 28)
+	reset_seat_btn.pressed.connect(func(): if is_instance_valid(camera): camera.reset_seat())
+	r_row.add_child(reset_seat_btn)
 
 func _build_hud_editor_toolbar() -> void:
 	hud_editor_panel = PanelContainer.new()
@@ -417,6 +564,8 @@ func enter_hud_editor() -> void:
 	is_editing_hud = true
 	hud_editor_panel.visible = true
 	top_bar.visible = false
+	if is_instance_valid(seat_adjust_panel):
+		seat_adjust_panel.visible = false
 	if is_instance_valid(mode_button):
 		mode_button.visible = true
 	
@@ -445,6 +594,7 @@ func exit_hud_editor(save: bool = true) -> void:
 		_build_ui()
 		_update_visibility()
 		
+	_update_camera_ui()
 	hud_editor_closed.emit()
 
 func _adjust_scale(delta: float) -> void:

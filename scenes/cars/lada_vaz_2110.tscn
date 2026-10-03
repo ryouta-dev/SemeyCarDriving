@@ -1,0 +1,5 @@
+[gd_scene load_steps=2 format=3 uid="uid://lada2110xx"]
+
+[ext_resource type="PackedScene" uid="uid://ccs7xtede51mo" path="res://addons/gevp/scenes/simcade_car.tscn" id="1_car"]
+
+[node name="LadaVaz2110" instance=ExtResource("1_car")]

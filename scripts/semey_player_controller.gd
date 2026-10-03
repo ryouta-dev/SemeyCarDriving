@@ -15,22 +15,32 @@ func _ready() -> void:
 		mobile_controls.shift_up_requested.connect(_on_shift_up)
 		mobile_controls.shift_down_requested.connect(_on_shift_down)
 		mobile_controls.toggle_transmission_requested.connect(_toggle_transmission)
-		if is_instance_valid(vehicle_node):
-			mobile_controls.update_transmission_ui(vehicle_node.automatic_transmission)
+	setup_vehicle()
 
-	# Instantiate Real-Time Physics Debug UI
-	if is_instance_valid(vehicle_node):
-		# Apply CPM style arcade physics
-		if vehicle_node.coefficient_of_friction is Dictionary:
-			vehicle_node.coefficient_of_friction["Road"] = 3.5
-		if vehicle_node.lateral_grip_assist is Dictionary:
-			vehicle_node.lateral_grip_assist["Road"] = 0.20
-		vehicle_node.countersteer_assist = 1.5
-		vehicle_node.steering_speed = 10.0
-		if vehicle_node.has_method("recalculate_physics"):
-			vehicle_node.recalculate_physics()
+func setup_vehicle() -> void:
+	if not is_instance_valid(vehicle_node):
+		return
 		
+	if is_instance_valid(mobile_controls):
+		mobile_controls.update_transmission_ui(vehicle_node.automatic_transmission)
+
+	# Apply CPM style arcade physics
+	if vehicle_node.coefficient_of_friction is Dictionary:
+		vehicle_node.coefficient_of_friction["Road"] = 3.5
+	if vehicle_node.lateral_grip_assist is Dictionary:
+		vehicle_node.lateral_grip_assist["Road"] = 0.20
+	vehicle_node.countersteer_assist = 1.5
+	vehicle_node.steering_speed = 10.0
+	if vehicle_node.has_method("recalculate_physics"):
+		vehicle_node.recalculate_physics()
+	
+	# Only add debug UI once
+	var existing_debug = get_node_or_null("DebugTuningUI")
+	if existing_debug:
+		existing_debug.vehicle = vehicle_node
+	else:
 		var debug_ui := DebugTuningUI.new()
+		debug_ui.name = "DebugTuningUI"
 		debug_ui.vehicle = vehicle_node
 		debug_ui.player_controller = self
 		add_child(debug_ui)

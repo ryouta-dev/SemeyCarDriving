@@ -4,6 +4,7 @@ extends CanvasLayer
 signal tuning_changed(new_profile: Dictionary)
 signal drive_requested
 signal reset_requested
+signal car_changed(car_id: String)
 
 const MobileControlsClass = preload("res://scripts/ui/mobile_controls.gd")
 
@@ -157,6 +158,28 @@ func _build_ui() -> void:
 	_btn_rain = _create_chip_button("🌧️ Дождь")
 	_btn_rain.pressed.connect(func(): _set_weather("rain"))
 	w_box.add_child(_btn_rain)
+
+	# Separator line 2
+	var sep2 := VSeparator.new()
+	sep2.add_theme_constant_override("separation", 10)
+	env_hbox.add_child(sep2)
+
+	# Car Selection Chips
+	var car_box := HBoxContainer.new()
+	car_box.add_theme_constant_override("separation", 4)
+	env_hbox.add_child(car_box)
+
+	var _btn_car_def = _create_chip_button("🚗 Default")
+	_btn_car_def.pressed.connect(func(): car_changed.emit("simcade_car"))
+	car_box.add_child(_btn_car_def)
+
+	var _btn_car_lada = _create_chip_button("🚗 Lada 2110")
+	_btn_car_lada.pressed.connect(func(): car_changed.emit("lada_vaz_2110"))
+	car_box.add_child(_btn_car_lada)
+
+	var _btn_car_priora = _create_chip_button("🚗 Priora")
+	_btn_car_priora.pressed.connect(func(): car_changed.emit("priora"))
+	car_box.add_child(_btn_car_priora)
 
 	# --- 2. FLOATING TUNING DRAWER BUTTON (WHEN CLOSED) ---
 	_tuning_open_btn = Button.new()

@@ -35,12 +35,18 @@ func _ready() -> void:
 		if mobile_controls.has_signal("garage_requested"):
 			mobile_controls.garage_requested.connect(open_garage)
 	
+	var profile = ProfileManagerClass.load_profile()
+
+	# Swap visual mesh based on selected car (keep the physics node intact so all NodePath refs stay valid)
+	if is_instance_valid(vehicle):
+		var car_id = profile.get("car", {}).get("selected_car", "simcade_car")
+		_swap_vehicle_mesh(vehicle, car_id)
+
 	# Spawn vehicle onto road/ground
 	if is_instance_valid(vehicle):
 		vehicle.freeze = true
 		vehicle.set_physics_process(false)
 		# Apply saved custom tuning to the car
-		var profile = ProfileManagerClass.load_profile()
 		VehicleTuningApplicatorClass.apply_tuning(vehicle, profile)
 		print("[SemeyWorldManager] Applied tuning profile to vehicle: ", profile.get("engine", {}).get("engine_id", "stock"))
 		
@@ -59,6 +65,11 @@ func _ready() -> void:
 			_spawn_vehicle()
 		else:
 			tile_manager.data_loaded.connect(func(_data): _spawn_vehicle())
+
+## Replace/remove child MeshInstance3D nodes and add the new car GLB as a visual child
+func _swap_vehicle_mesh(veh: Node, car_id: String) -> void:
+	VehicleTuningApplicatorClass.swap_vehicle_mesh(veh, car_id)
+
 
 func _spawn_vehicle() -> void:
 	if not is_instance_valid(vehicle) or not is_instance_valid(tile_manager):

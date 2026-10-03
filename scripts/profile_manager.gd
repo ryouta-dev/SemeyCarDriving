@@ -29,6 +29,9 @@ static func get_default_profile() -> Dictionary:
 			"drivetrain": "rwd",         # "rwd", "awd"
 			"final_drive": 3.45          # 2.8 to 4.3
 		},
+		"car": {
+			"selected_car": "simcade_car"
+		},
 		"hud": {
 			"button_scale": 1.0,         # 0.8 to 1.5
 			"steer_mode": "arrows",      # "arrows" or "wheel"
@@ -40,8 +43,14 @@ static func get_default_profile() -> Dictionary:
 		"environment": {
 			"time_of_day": "day",        # "day", "sunset", "night"
 			"weather": "clear"           # "clear", "rain"
+		},
+		"camera": {
+			"mode": 0,                   # 0 = MEDIUM, 1 = FAR, 2 = FIRST_PERSON
+			"seat_height": 0.0,          # -0.3 to +0.3 m
+			"seat_forward": 0.0          # -0.3 to +0.3 m
 		}
 	}
+
 
 static func load_profile() -> Dictionary:
 	if not FileAccess.file_exists(SAVE_PATH):
