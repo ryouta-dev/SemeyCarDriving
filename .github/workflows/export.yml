@@ -83,6 +83,13 @@ jobs:
           echo "=== Editor Settings ==="
           cat ~/.config/godot/editor_settings-4.7.tres
 
+      - name: "Import Project Assets"
+        run: |
+          echo "=== Running Godot headless import to compile all GLB/textures ==="
+          godot -v --headless --import --quit-after 120 2>&1 | tail -30 || true
+          echo "=== Import complete. Godot cache: ==="
+          ls .godot/imported/ 2>/dev/null | wc -l || true
+
       - name: "Export Android Debug APK"
         run: |
           set -o pipefail
@@ -153,6 +160,13 @@ jobs:
             echo "Using placeholder app_store_team_id=ABCDE12345 from export_presets.cfg"
           fi
           grep -E "application/(app_store_team_id|signature)" export_presets.cfg
+
+      - name: "Import Project Assets"
+        run: |
+          echo "=== Running Godot headless import to compile all GLB/textures ==="
+          godot -v --headless --import --quit-after 120 2>&1 | tail -30 || true
+          echo "=== Import complete. Godot cache: ==="
+          ls .godot/imported/ 2>/dev/null | wc -l || true
 
       - name: "Export iOS Xcode Project"
         run: |
