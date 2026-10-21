@@ -152,6 +152,35 @@ func _run() -> void:
 			await process_frame
 		scene.queue_free()
 		await process_frame
+	# ── M1 rework scenes ──────────────────────────────────────────────────────
+	var menu_scene := (load("res://scenes/menu.tscn") as PackedScene).instantiate()
+	root.add_child(menu_scene)
+	await _wait_until(func(): return is_instance_valid(menu_scene._car), 180)
+	_check(is_instance_valid(menu_scene._car), "M1 menu car spawned")
+	_check(menu_scene.get_node_or_null("MenuUI") != null, "M1 menu UI built")
+	menu_scene.queue_free()
+	await process_frame
+
+	var showcase := (load("res://scenes/showcase_bridge.tscn") as PackedScene).instantiate()
+	root.add_child(showcase)
+	var showcase_ready: bool = await _wait_until(func(): return is_instance_valid(showcase.vehicle) and not showcase.vehicle.freeze, 300)
+	_check(showcase_ready, "M1 showcase car activated")
+	_check(showcase.get_node_or_null("BridgeDeck") != null, "M1 bridge deck built")
+	_check(showcase.get_node_or_null("CameraRig") != null, "M1 camera rig exists")
+	_check(showcase.hud != null and is_instance_valid(showcase.hud._speedometer), "M1 HUD built")
+	showcase.hud._select_gear("P")
+	var parked: bool = await _wait_until(func(): return showcase.vehicle.freeze, 30)
+	_check(parked, "M1 P freezes the car")
+	showcase.hud._select_gear("D")
+	var driving: bool = await _wait_until(func(): return not showcase.vehicle.freeze, 30)
+	_check(driving, "M1 D unfreezes the car")
+	showcase.hud._toggle_pause()
+	_check(paused and showcase.hud.is_paused(), "M1 pause works")
+	showcase.hud._toggle_pause()
+	_check(not paused and not showcase.hud.is_paused(), "M1 resume works")
+	showcase.queue_free()
+	await process_frame
+
 	# Free anything still parented to the test root so the headless teardown does
 	# not report leaked renderer instances.
 	for child in root.get_children():

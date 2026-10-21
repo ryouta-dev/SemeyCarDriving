@@ -11,8 +11,8 @@ config_version=5
 [application]
 
 config/name="Semey Car Driving"
-config/version="0.0.4"
-run/main_scene="res://scenes/garage.tscn"
+config/version="0.1.0"
+run/main_scene="res://scenes/menu.tscn"
 config/features=PackedStringArray("4.7", "Mobile")
 config/icon="res://icon.png"
 
@@ -82,7 +82,8 @@ common/physics_ticks_per_second=120
 
 [rendering]
 
-renderer/rendering_method="mobile"
+renderer/rendering_method="forward_plus"
+renderer/rendering_method.mobile="forward_plus"
 textures/vram_compression/import_etc2_astc=true
 lights_and_shadows/directional_shadow/soft_shadow_filter_quality=3
 lights_and_shadows/directional_shadow/16_bits=false

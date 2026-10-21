@@ -86,6 +86,8 @@ func _process_drag(current_pos: Vector2, center: Vector2) -> void:
 	previous_touch_pos = current_pos
 
 func _draw() -> void:
+	if size.x < 8.0 or size.y < 8.0:
+		return
 	var center = size * 0.5
 	var radius = min(size.x, size.y) * 0.46
 	var inner_radius = radius * 0.72
@@ -121,7 +123,7 @@ func _draw() -> void:
 	# Center Emblem (Stylized "S" for Semey)
 	var font = ThemeDB.fallback_font
 	var text = "S"
-	var font_size = int(hub_radius * 1.1)
+	var font_size = maxi(1, int(hub_radius * 1.1))
 	var str_size = font.get_string_size(text, HORIZONTAL_ALIGNMENT_CENTER, -1, font_size)
 	var text_pos = -str_size * 0.5 + Vector2(0, str_size.y * 0.75)
 	draw_string(font, text_pos, text, HORIZONTAL_ALIGNMENT_CENTER, -1, font_size, Color(0.4, 0.8, 1.0, 0.9))

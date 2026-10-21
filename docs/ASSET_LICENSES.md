@@ -33,6 +33,8 @@
 | `impact.wav` | звук | Freesound #682371 (`pnmcarrierailfan`) | pnmcarrierailfan | Freesound, не проверена | YELLOW | То же |
 | `tire_screech.wav` | звук | Freesound #71737 (`audible-edge`) | audible-edge | Freesound, не проверена | YELLOW | То же |
 | `rain_generated.wav` | звук | сгенерирован процедурно для патча | проект | собственная | GREEN | Детерминированный шум |
+| `ambience_wind.wav` | звук | сгенерирован `tools/generate_ambience.py` | проект | собственная | GREEN | Процедурный ветер, CC0 по построению |
+| `ambience_water.wav` | звук | сгенерирован `tools/generate_ambience.py` | проект | собственная | GREEN | Процедурная вода, CC0 по построению |
 | `4000.wav` | звук | Godot Easy Vehicle Physics (GEVP) | авторы GEVP | MIT (см. `addons/gevp/LICENSE`) | GREEN | Проверить сохранение уведомления при релизе |
 | `map.osm` | данные карты | OpenStreetMap contributors | OSM contributors | ODbL 1.0 | GREEN | Нужна атрибуция «© OpenStreetMap contributors» |
 | `triumph_600m.osm` | данные карты | OpenStreetMap contributors | OSM contributors | ODbL 1.0 | GREEN | То же |

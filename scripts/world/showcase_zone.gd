@@ -1,0 +1,330 @@
+﻿extends Node3D
+
+## M1 showcase zone: the Semey suspension bridge and its embankment.
+## Everything here is authored from primitives and CC0-free materials so the
+## first slice has zero paid dependencies.
+
+const PRIORA := "priora"
+const SPAWN_POSITION := Vector3(0.0, 1.0, -150.0)
+const RESET_Y := -30.0
+
+var vehicle: Vehicle
+var camera_rig: VehicleCameraRig
+var hud: HUDM1
+var controller: DriveController
+var headlights: Node3D
+var engine_sound: EngineSound
+
+var _profile: Dictionary
+
+func _ready() -> void:
+	_profile = ProfileManager.load_profile()
+	_profile["car"]["selected_car"] = PRIORA
+	_build_environment()
+	_build_water_and_banks()
+	BridgeBuilder.build(self)
+	_build_embankment()
+	_build_city()
+	_spawn_car()
+	_build_headlights()
+	_setup_camera()
+	_setup_hud()
+	_setup_audio()
+	_setup_controller()
+
+func _build_environment() -> void:
+	var sky_material := ProceduralSkyMaterial.new()
+	sky_material.sky_top_color = Color("4f7fae")
+	sky_material.sky_horizon_color = Color("dfe9f2")
+	sky_material.ground_bottom_color = Color("3b424a")
+	sky_material.ground_horizon_color = Color("b7c4d0")
+	sky_material.sun_angle_max = 18.0
+	sky_material.sun_curve = 0.1
+	var sky := Sky.new()
+	sky.sky_material = sky_material
+	var environment := Environment.new()
+	environment.background_mode = Environment.BG_SKY
+	environment.sky = sky
+	environment.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
+	environment.ambient_light_energy = 1.0
+	environment.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
+	environment.tonemap_mode = Environment.TONE_MAPPER_ACES
+	environment.glow_enabled = true
+	environment.glow_intensity = 0.45
+	environment.glow_bloom = 0.05
+	environment.fog_enabled = true
+	environment.fog_light_color = Color("c7d7e5")
+	environment.fog_density = 0.0007
+	environment.fog_aerial_perspective = 0.2
+	environment.fog_sky_affect = 0.2
+	environment.ssao_enabled = true
+	environment.ssao_intensity = 1.3
+	environment.ssao_radius = 1.2
+	var world_environment := WorldEnvironment.new()
+	world_environment.name = "WorldEnvironment"
+	world_environment.environment = environment
+	add_child(world_environment)
+	world_environment.add_to_group("quality_environment")
+
+	var sun := DirectionalLight3D.new()
+	sun.name = "Sun"
+	sun.rotation_degrees = Vector3(-38.0, -32.0, 0.0)
+	sun.light_color = Color("fff0dc")
+	sun.light_energy = 2.2
+	sun.shadow_enabled = true
+	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
+	sun.directional_shadow_max_distance = 600.0
+	sun.directional_shadow_split_1 = 0.06
+	sun.directional_shadow_split_2 = 0.16
+	sun.directional_shadow_split_3 = 0.42
+	add_child(sun)
+
+func _build_water_and_banks() -> void:
+	var water_material := StandardMaterial3D.new()
+	water_material.albedo_color = Color("17384c")
+	water_material.metallic = 0.92
+	water_material.roughness = 0.06
+	var water_mesh := PlaneMesh.new()
+	water_mesh.size = Vector2(4000.0, 4000.0)
+	var water := MeshInstance3D.new()
+	water.name = "River"
+	water.mesh = water_mesh
+	water.material_override = water_material
+	water.position = Vector3(0.0, -8.0, -520.0)
+	water.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(water)
+
+	var bank_material := _material(Color("6d7463"), 0.95, 0.0)
+	var concrete := _material(Color("b8b4ab"), 0.85, 0.0)
+	var asphalt := _material(Color("30343a"), 0.92, 0.0)
+	_bank(Vector3(0, -5, 230), Vector3(700, 10, 340), bank_material)
+	_bank(Vector3(0, -5, -1250), Vector3(700, 10, 300), bank_material)
+	# Approach roads on both banks.
+	_box(self, Vector3(26, 0.12, 140), Vector3(0, 0.06, 130), asphalt)
+	_box(self, Vector3(26, 0.12, 100), Vector3(0, 0.06, -1150), asphalt)
+	_box(self, Vector3(0.12, 0.02, 140), Vector3(0, 0.13, 130), _material(Color("e9e5d8"), 0.7, 0.0))
+
+func _bank(center: Vector3, size: Vector3, material: Material) -> void:
+	var body := StaticBody3D.new()
+	body.position = center
+	add_child(body)
+	var mesh := BoxMesh.new()
+	mesh.size = size
+	var instance := MeshInstance3D.new()
+	instance.mesh = mesh
+	instance.material_override = material
+	body.add_child(instance)
+	var collision := CollisionShape3D.new()
+	var shape := BoxShape3D.new()
+	shape.size = size
+	collision.shape = shape
+	body.add_child(collision)
+
+func _build_embankment() -> void:
+	var concrete := _material(Color("bcb7ad"), 0.82, 0.0)
+	var dark := _material(Color("6f6a62"), 0.9, 0.0)
+	var paint := _material(Color("e9e5d8"), 0.7, 0.0)
+	# Promenade slab and edge parapet.
+	_box(self, Vector3(420, 0.2, 26), Vector3(0, 0.1, 72), concrete)
+	var parapet := StaticBody3D.new()
+	parapet.position = Vector3(0, 0.55, 58.8)
+	add_child(parapet)
+	var parapet_mesh := BoxMesh.new()
+	parapet_mesh.size = Vector3(420, 1.1, 0.5)
+	var parapet_instance := MeshInstance3D.new()
+	parapet_instance.mesh = parapet_mesh
+	parapet_instance.material_override = concrete
+	parapet.add_child(parapet_instance)
+	var parapet_shape := CollisionShape3D.new()
+	var parapet_box := BoxShape3D.new()
+	parapet_box.size = parapet_mesh.size
+	parapet_shape.shape = parapet_box
+	parapet.add_child(parapet_shape)
+	# Benches.
+	for i in range(6):
+		_box(self, Vector3(2.2, 0.45, 0.6), Vector3(-150 + i * 60, 0.35, 67), dark)
+	# Trees: one MultiMesh for trunks, one for crowns.
+	var trunks: Array[Transform3D] = []
+	var crowns: Array[Transform3D] = []
+	for i in range(15):
+		var x: float = -168.0 + i * 24.0
+		var z: float = 82.0 + float(i % 2) * 2.0
+		trunks.append(Transform3D(Basis.from_scale(Vector3(0.18, 4.2, 0.18)), Vector3(x, 2.1, z)))
+		crowns.append(Transform3D(Basis.from_scale(Vector3(2.6, 2.2, 2.6)), Vector3(x, 5.4, z)))
+	var trunk_mesh := CylinderMesh.new()
+	trunk_mesh.top_radius = 1.0
+	trunk_mesh.bottom_radius = 1.0
+	trunk_mesh.height = 1.0
+	trunk_mesh.radial_segments = 5
+	_multimesh(self, trunk_mesh, trunks, dark)
+	var crown_mesh := SphereMesh.new()
+	crown_mesh.radius = 1.0
+	crown_mesh.height = 2.0
+	_multimesh(self, crown_mesh, crowns, _material(Color("3f5a38"), 0.9, 0.0))
+	# Promenade lamps (emissive heads, no dynamic lights in daylight).
+	var poles: Array[Transform3D] = []
+	var heads: Array[Transform3D] = []
+	for i in range(11):
+		var x: float = -200.0 + i * 40.0
+		poles.append(Transform3D(Basis.from_scale(Vector3(0.1, 6.5, 0.1)), Vector3(x, 3.25, 63.5)))
+		heads.append(Transform3D(Basis.from_scale(Vector3(0.7, 0.18, 0.34)), Vector3(x, 6.55, 63.2)))
+	_multimesh(self, truncate_cylinder(6), poles, dark)
+	var lamp_material := _material(Color("d9d4c6"), 0.45, 0.0)
+	lamp_material.emission_enabled = true
+	lamp_material.emission = Color("ffd9a0")
+	lamp_material.emission_energy_multiplier = 1.2
+	var head_mesh := BoxMesh.new()
+	head_mesh.size = Vector3.ONE
+	_multimesh(self, head_mesh, heads, lamp_material)
+	_box(self, Vector3(420, 0.25, 0.3), Vector3(0, 0.86, 58.8), paint)
+
+func _build_city() -> void:
+	var transforms: Array[Transform3D] = []
+	var near_transforms: Array[Transform3D] = []
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 20261021
+	for i in range(34):
+		var x: float = rng.randf_range(-280.0, 280.0)
+		var z: float = rng.randf_range(-1330.0, -1140.0)
+		var height: float = rng.randf_range(18.0, 66.0)
+		var width: float = rng.randf_range(14.0, 30.0)
+		var depth: float = rng.randf_range(12.0, 24.0)
+		transforms.append(Transform3D(Basis.from_scale(Vector3(width, height, depth)), Vector3(x, height * 0.5, z)))
+	for i in range(14):
+		var x: float = rng.randf_range(-260.0, 260.0)
+		var z: float = rng.randf_range(180.0, 330.0)
+		var height: float = rng.randf_range(15.0, 48.0)
+		near_transforms.append(Transform3D(Basis.from_scale(Vector3(rng.randf_range(14.0, 26.0), height, rng.randf_range(12.0, 20.0))), Vector3(x, height * 0.5, z)))
+	var building_mesh := BoxMesh.new()
+	building_mesh.size = Vector3.ONE
+	var building_material := _material(Color("8d99a6"), 0.9, 0.0)
+	_multimesh(self, building_mesh, transforms, building_material)
+	_multimesh(self, building_mesh, near_transforms, _material(Color("7f8a96"), 0.9, 0.0))
+
+func _spawn_car() -> void:
+	var packed := load("res://addons/gevp/scenes/simcade_car.tscn") as PackedScene
+	if packed == null:
+		push_error("Showcase: cannot load vehicle scene")
+		return
+	vehicle = packed.instantiate() as Vehicle
+	vehicle.name = "PlayerCar"
+	vehicle.freeze = true
+	vehicle.set_physics_process(false)
+	add_child(vehicle)
+	VehicleTuningApplicator.apply_tuning(vehicle, _profile)
+	vehicle.global_position = SPAWN_POSITION
+	vehicle.global_rotation = Vector3.ZERO
+	vehicle.linear_velocity = Vector3.ZERO
+	vehicle.angular_velocity = Vector3.ZERO
+	vehicle.previous_global_position = vehicle.global_position
+	vehicle.freeze = false
+	vehicle.set_physics_process(true)
+
+func _build_headlights() -> void:
+	if vehicle == null:
+		return
+	headlights = Node3D.new()
+	headlights.name = "Headlights"
+	vehicle.add_child(headlights)
+	for x: float in [-0.72, 0.72]:
+		var spot := SpotLight3D.new()
+		spot.position = Vector3(x, 0.72, -2.1)
+		spot.rotation_degrees = Vector3(-3.0, 0.0, 0.0)
+		spot.spot_range = 45.0
+		spot.spot_angle = 30.0
+		spot.light_energy = 0.0
+		spot.visible = false
+		spot.shadow_enabled = false
+		headlights.add_child(spot)
+
+func _setup_camera() -> void:
+	camera_rig = VehicleCameraRig.new()
+	camera_rig.name = "CameraRig"
+	camera_rig.target = vehicle
+	add_child(camera_rig)
+
+func _setup_hud() -> void:
+	hud = HUDM1.new()
+	hud.name = "HUD"
+	hud.vehicle = vehicle
+	hud.camera_rig = camera_rig
+	hud.headlights = headlights
+	add_child(hud)
+
+func _setup_audio() -> void:
+	if vehicle != null:
+		engine_sound = EngineSound.new()
+		engine_sound.name = "EngineSound"
+		vehicle.add_child(engine_sound)
+	add_child(AmbienceM1.new())
+
+func _setup_controller() -> void:
+	controller = DriveController.new()
+	controller.name = "DriveController"
+	controller.vehicle = vehicle
+	controller.hud = hud
+	controller.engine_sound = engine_sound
+	add_child(controller)
+
+func _physics_process(_delta: float) -> void:
+	if vehicle == null:
+		return
+	if vehicle.global_position.y < RESET_Y or not vehicle.global_position.is_finite():
+		reset_car()
+
+func _unhandled_input(event: InputEvent) -> void:
+	if event is InputEventKey and event.pressed and not event.echo:
+		if event.keycode == KEY_R:
+			reset_car()
+
+func reset_car() -> void:
+	if vehicle == null:
+		return
+	vehicle.freeze = true
+	vehicle.global_position = SPAWN_POSITION
+	vehicle.global_rotation = Vector3.ZERO
+	vehicle.linear_velocity = Vector3.ZERO
+	vehicle.angular_velocity = Vector3.ZERO
+	vehicle.previous_global_position = vehicle.global_position
+	vehicle.freeze = false
+
+# в”Ђв”Ђ Shared helpers в”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђв”Ђ
+
+func _material(color: Color, roughness: float, metallic: float) -> StandardMaterial3D:
+	var material := StandardMaterial3D.new()
+	material.albedo_color = color
+	material.roughness = roughness
+	material.metallic = metallic
+	return material
+
+func _box(parent: Node, size: Vector3, position: Vector3, material: Material) -> MeshInstance3D:
+	var mesh := BoxMesh.new()
+	mesh.size = size
+	var instance := MeshInstance3D.new()
+	instance.mesh = mesh
+	instance.position = position
+	instance.material_override = material
+	parent.add_child(instance)
+	return instance
+
+func _multimesh(parent: Node, mesh: Mesh, transforms: Array, material: Material) -> void:
+	var multimesh := MultiMesh.new()
+	multimesh.transform_format = MultiMesh.TRANSFORM_3D
+	multimesh.mesh = mesh
+	multimesh.instance_count = transforms.size()
+	for i in range(transforms.size()):
+		multimesh.set_instance_transform(i, transforms[i])
+	var instance := MultiMeshInstance3D.new()
+	instance.multimesh = multimesh
+	instance.material_override = material
+	instance.custom_aabb = AABB(Vector3(-400, -10, -1400), Vector3(800, 120, 1800))
+	parent.add_child(instance)
+
+func truncate_cylinder(segments: int) -> CylinderMesh:
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = 1.0
+	mesh.bottom_radius = 1.0
+	mesh.height = 1.0
+	mesh.radial_segments = segments
+	mesh.rings = 1
+	return mesh
