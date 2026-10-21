@@ -1,0 +1,11 @@
+[gd_resource type="Resource" script_class="VehicleDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/vehicle_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "simcade_car"
+display_name = "Muscle / Simcade"
+mass_kg = 1746.0
+front_z = -1.44939
+rear_z = 1.44939

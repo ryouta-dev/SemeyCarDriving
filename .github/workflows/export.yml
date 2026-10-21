@@ -1,0 +1,143 @@
+﻿name: Test and build mobile
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      godot_version:
+        description: Godot version matching your editor and export templates
+        default: "4.7.2"
+        required: true
+      build_ios:
+        description: Export an Xcode project (requires APPLE_TEAM_ID repository secret)
+        type: boolean
+        default: false
+permissions:
+  contents: read
+env:
+  GODOT_VERSION: ${{ inputs.godot_version || '4.7.2' }}
+  GODOT_RELEASE: stable
+jobs:
+  python-tests:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Python regression tests (UTF-8)
+        env:
+          PYTHONUTF8: "1"
+        run: python -m unittest discover -s tests -p "test_*.py" -v
+      - name: Asset ledger audit
+        run: python tools/check_assets.py
+
+  test-android:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Python regression tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+      - name: Install pinned Godot and export templates
+        shell: bash
+        run: |
+          set -euo pipefail
+          base="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_RELEASE}"
+          file="Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_linux.x86_64"
+          curl -fLsS "$base/$file.zip" -o /tmp/godot.zip
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          sudo install -m 755 "/tmp/godot/$file" /usr/local/bin/godot
+          curl -fLsS "$base/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_export_templates.tpz" -o /tmp/templates.tpz
+          unzip -q /tmp/templates.tpz -d /tmp/templates
+          dest="$HOME/.local/share/godot/export_templates/${GODOT_VERSION}.${GODOT_RELEASE}"
+          mkdir -p "$dest"
+          mv /tmp/templates/templates/* "$dest/"
+          godot --version
+      - name: Clean import (fail on script/resource errors)
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p build
+          timeout 600 godot --headless --editor --import --quit 2>&1 | tee build/import.log
+          if grep -E 'SCRIPT ERROR|Parse Error|Failed loading resource|Cannot open file' build/import.log; then exit 1; fi
+      - name: Godot runtime regression and scene smoke tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          timeout 300 godot --headless --audio-driver Dummy --script tests/runtime_tests.gd 2>&1 | tee build/runtime.log
+          if grep -E 'SCRIPT ERROR|Parse Error|Failed loading resource' build/runtime.log; then exit 1; fi
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Android debug setup
+        shell: bash
+        run: |
+          set -euo pipefail
+          sdkmanager "build-tools;34.0.0" "platform-tools" "platforms;android-34"
+          mkdir -p "$HOME/.android" "$HOME/.config/godot"
+          keytool -genkeypair -keyalg RSA -alias androiddebugkey -keypass android -keystore "$HOME/.android/debug.keystore" -storepass android -dname "CN=Android Debug,O=Android,C=US" -validity 9999
+          minor="${GODOT_VERSION%.*}"
+          for suffix in 4 "$minor"; do
+            printf '[gd_resource type="EditorSettings" format=3]\n\n[resource]\nexport/android/android_sdk_path = "%s"\nexport/android/java_sdk_path = "%s"\nexport/android/debug_keystore = "%s"\nexport/android/debug_keystore_user = "androiddebugkey"\nexport/android/debug_keystore_pass = "android"\n' "$ANDROID_HOME" "$JAVA_HOME" "$HOME/.android/debug.keystore" > "$HOME/.config/godot/editor_settings-$suffix.tres"
+          done
+      - name: Export test APK
+        run: |
+          set -euo pipefail
+          godot --headless --export-debug Android build/SemeyCarDriving-debug.apk 2>&1 | tee build/android_export.log
+          test -s build/SemeyCarDriving-debug.apk
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: SemeyCarDriving-debug-and-logs
+          path: build/
+  ios-project:
+    if: github.event_name == 'workflow_dispatch' && inputs.build_ios
+    runs-on: macos-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Godot and templates
+        run: |
+          set -euo pipefail
+          base="https://github.com/godotengine/godot/releases/download/${GODOT_VERSION}-${GODOT_RELEASE}"
+          curl -fLsS "$base/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_macos.universal.zip" -o /tmp/godot.zip
+          unzip -q /tmp/godot.zip -d /tmp/godot
+          sudo cp -R /tmp/godot/Godot.app /Applications/
+          sudo ln -sf /Applications/Godot.app/Contents/MacOS/Godot /usr/local/bin/godot
+          curl -fLsS "$base/Godot_v${GODOT_VERSION}-${GODOT_RELEASE}_export_templates.tpz" -o /tmp/templates.tpz
+          unzip -q /tmp/templates.tpz -d /tmp/templates
+          dest="$HOME/Library/Application Support/Godot/export_templates/${GODOT_VERSION}.${GODOT_RELEASE}"
+          mkdir -p "$dest"
+          mv /tmp/templates/templates/* "$dest/"
+      - name: Configure Apple developer team
+        env:
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: |
+          python3 - <<'PY'
+          import os,re
+          from pathlib import Path
+          team=os.environ.get('APPLE_TEAM_ID','')
+          if not re.fullmatch(r'[A-Z0-9]{10}',team):
+              raise SystemExit('Set a valid APPLE_TEAM_ID repository secret, or leave build_ios disabled.')
+          p=Path('export_presets.cfg')
+          p.write_text(p.read_text().replace('application/app_store_team_id=""', 'application/app_store_team_id="'+team+'"'))
+          PY
+      - name: Import, then export Xcode project (not an unsigned installable IPA)
+        run: |
+          set -euo pipefail
+          mkdir -p build/ios
+          godot --headless --editor --import --quit 2>&1 | tee build/ios/import.log
+          if grep -E 'SCRIPT ERROR|Parse Error|Failed loading resource|Cannot open file' build/ios/import.log; then exit 1; fi
+          godot --headless --export-debug iOS build/ios/SemeyCarDriving-Xcode.zip
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: SemeyCarDriving-Xcode-project
+          path: build/ios/

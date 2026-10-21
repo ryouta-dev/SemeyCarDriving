@@ -1,0 +1,26 @@
+# Godot-specific ignores
+.godot/
+*.translation
+
+# OS / Editor ignores
+.DS_Store
+Thumbs.db
+*.tmp
+*.log
+
+# Export credentials & sensitive data
+export_credentials.cfg
+.env
+*.ps1
+run.json
+jobs.json
+
+# Generated builds and local security files
+build/
+__pycache__/
+*.pyc
+*.bak
+*.blend1
+*.keystore
+.env.*
+!.env.example

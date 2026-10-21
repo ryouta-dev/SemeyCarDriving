@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="VehicleDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/vehicle_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "priora"
+display_name = "Lada Priora"
+visual_path = "res://priora_rigged.glb"
+visual_path_low = "res://priora_rigged_low.glb"
+visual_offset = Vector3(0, -0.29, 0)
+mass_kg = 1185.0
+tire_radius = 0.2893
+tire_width = 195.0
+front_half_track = 0.72
+rear_half_track = 0.71
+front_z = -1.15
+rear_z = 1.34
+collider_size = Vector3(1.70, 1.0, 4.20)
+collider_center = Vector3(0, 0.48, 0)
+rear_tire_width = 195.0

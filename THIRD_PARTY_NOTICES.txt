@@ -1,0 +1,21 @@
+Semey Car Driving — third-party notices
+
+Map data: © OpenStreetMap contributors.
+https://www.openstreetmap.org/copyright
+Data licensed under the Open Database License (ODbL) 1.0.
+https://opendatacommons.org/licenses/odbl/1-0/
+
+GEVP: retain the existing addons/gevp/LICENSE and source notices.
+Pro Vehicle Camera: retain licenses/pro_vehicle_camera-LICENSE.
+OSM world-generation source: upstream standalone license was not supplied;
+verify its licensing/provenance before public distribution.
+Other preserved component license: licenses/vehicle_framework-LICENSE.
+Sound origins and authors: sounds/SOURCES.md.
+The exact Freesound licenses and car-model licenses were not supplied/verified;
+check rights before distribution or monetization. This archive is for private testing.
+No ownership of third-party assets is claimed.
+Rain_generated.wav is deterministic procedural noise generated for this patch.
+
+Per-asset licence status (GREEN/YELLOW/RED) and the release checklist:
+docs/ASSET_LICENSES.md. Verdict: several car and environment assets are RED and
+must not be published in a store build until their rights are confirmed.

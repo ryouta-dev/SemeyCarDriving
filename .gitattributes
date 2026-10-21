@@ -1,0 +1,19 @@
+# Normalise line endings so the repo does not churn on Windows checkouts.
+* text=auto eol=lf
+
+# Binary assets: never diff/convert.
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.glb binary
+*.blend binary
+*.blend1 binary
+*.wav binary
+*.ogg binary
+*.mp3 binary
+*.ctex binary
+*.scn binary
+*.res binary
+
+# Large OSM extracts: keep them byte-for-byte (no EOL rewriting).
+data/*.osm -text

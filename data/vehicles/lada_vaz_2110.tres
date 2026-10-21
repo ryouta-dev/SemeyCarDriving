@@ -1,0 +1,21 @@
+[gd_resource type="Resource" script_class="VehicleDefinition" load_steps=2 format=3]
+
+[ext_resource type="Script" path="res://scripts/vehicle_definition.gd" id="1"]
+
+[resource]
+script = ExtResource("1")
+id = "lada_vaz_2110"
+display_name = "Lada ВАЗ-2110"
+visual_path = "res://lada_vaz_2110_rigged.glb"
+visual_path_low = "res://lada_vaz_2110_rigged_low.glb"
+visual_offset = Vector3(0, -0.29, 0)
+mass_kg = 1100.0
+tire_radius = 0.2875
+tire_width = 185.0
+front_half_track = 0.72
+rear_half_track = 0.71
+front_z = -1.2
+rear_z = 1.3
+collider_size = Vector3(1.68, 1.05, 4.20)
+collider_center = Vector3(0, 0.5, 0)
+rear_tire_width = 185.0
