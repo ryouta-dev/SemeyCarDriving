@@ -16,6 +16,7 @@
 | `priora_rigged.glb` | 3D-модель | архив проекта | неизвестен | не подтверждена | RED | Права на модель не предоставлены |
 | `priora_rigged_low.glb` | 3D-модель (LOD) | производная от `priora_rigged.glb` | неизвестен | наследует исходную | RED | Децимация glTF Transform |
 | `icon.png` | иконка | архив проекта | неизвестен | не подтверждена | YELLOW | Заменить перед публикацией при необходимости |
+| `priora_plate.png` | текстура | сгенерирована `tools/generate_plate.py` | проект | собственная | GREEN | Номерной знак, процедурный |
 | `bollard.glb` | окружение | OpenStreetMap Racer (вендоренная копия) | авторы апстрима | не предоставлена | RED | `THIRD_PARTY_NOTICES.txt`: лицензия апстрима не передана |
 | `building_panel_5fl.glb` | окружение | OpenStreetMap Racer | авторы апстрима | не предоставлена | RED | То же |
 | `building_panel_9fl.glb` | окружение | OpenStreetMap Racer | авторы апстрима | не предоставлена | RED | То же |

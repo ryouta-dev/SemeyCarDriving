@@ -1,4 +1,4 @@
-﻿extends Node3D
+extends Node3D
 
 ## M1 showcase zone: the Semey suspension bridge and its embankment.
 ## Everything here is authored from primitives and CC0-free materials so the
@@ -7,6 +7,8 @@
 const PRIORA := "priora"
 const SPAWN_POSITION := Vector3(0.0, 1.0, -150.0)
 const RESET_Y := -30.0
+const SKY_SHADER := preload("res://scripts/shaders/m1_sky.gdshader")
+const WATER_SHADER := preload("res://scripts/shaders/m1_water.gdshader")
 
 var vehicle: Vehicle
 var camera_rig: VehicleCameraRig
@@ -14,6 +16,7 @@ var hud: HUDM1
 var controller: DriveController
 var headlights: Node3D
 var engine_sound: EngineSound
+var rear_lights: Node3D
 
 var _profile: Dictionary
 
@@ -33,13 +36,17 @@ func _ready() -> void:
 	_setup_controller()
 
 func _build_environment() -> void:
-	var sky_material := ProceduralSkyMaterial.new()
-	sky_material.sky_top_color = Color("4f7fae")
-	sky_material.sky_horizon_color = Color("dfe9f2")
-	sky_material.ground_bottom_color = Color("3b424a")
-	sky_material.ground_horizon_color = Color("b7c4d0")
-	sky_material.sun_angle_max = 18.0
-	sky_material.sun_curve = 0.1
+	var sky_material := ShaderMaterial.new()
+	sky_material.shader = SKY_SHADER
+	sky_material.set_shader_parameter("zenith_color", Color("3c6f9e"))
+	sky_material.set_shader_parameter("horizon_color", Color("dfeaf3"))
+	sky_material.set_shader_parameter("ground_color", Color("3b424a"))
+	sky_material.set_shader_parameter("sun_color", Color("fff1dc"))
+	sky_material.set_shader_parameter("sun_size", 0.0012)
+	sky_material.set_shader_parameter("sun_glow", 0.45)
+	sky_material.set_shader_parameter("cloud_coverage", 0.34)
+	sky_material.set_shader_parameter("cloud_scale", 1.2)
+	sky_material.set_shader_parameter("cloud_opacity", 0.9)
 	var sky := Sky.new()
 	sky.sky_material = sky_material
 	var environment := Environment.new()
@@ -80,12 +87,16 @@ func _build_environment() -> void:
 	add_child(sun)
 
 func _build_water_and_banks() -> void:
-	var water_material := StandardMaterial3D.new()
-	water_material.albedo_color = Color("17384c")
-	water_material.metallic = 0.92
-	water_material.roughness = 0.06
+	var water_material := ShaderMaterial.new()
+	water_material.shader = WATER_SHADER
+	water_material.set_shader_parameter("deep_color", Color("0b1f2a"))
+	water_material.set_shader_parameter("shallow_color", Color("17414c"))
+	water_material.set_shader_parameter("wave_height", 0.12)
+	water_material.set_shader_parameter("ripple_scale", 0.9)
 	var water_mesh := PlaneMesh.new()
 	water_mesh.size = Vector2(4000.0, 4000.0)
+	water_mesh.subdivide_width = 64
+	water_mesh.subdivide_depth = 64
 	var water := MeshInstance3D.new()
 	water.name = "River"
 	water.mesh = water_mesh
@@ -219,6 +230,8 @@ func _spawn_car() -> void:
 	vehicle.previous_global_position = vehicle.global_position
 	vehicle.freeze = false
 	vehicle.set_physics_process(true)
+	CarDetails.attach_plates(vehicle)
+	rear_lights = CarDetails.attach_rear_lights(vehicle)
 
 func _build_headlights() -> void:
 	if vehicle == null:
@@ -271,6 +284,9 @@ func _physics_process(_delta: float) -> void:
 		return
 	if vehicle.global_position.y < RESET_Y or not vehicle.global_position.is_finite():
 		reset_car()
+
+func _process(_delta: float) -> void:
+	CarDetails.update_rear_lights(rear_lights, vehicle)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:

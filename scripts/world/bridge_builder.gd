@@ -35,6 +35,7 @@ static func build(parent: Node3D) -> void:
 	_deck(parent, concrete, asphalt)
 	_railings(parent, metal)
 	_markings(parent, paint)
+	_surface_details(parent, paint, metal)
 	_towers(parent, concrete, metal)
 	_cables(parent, metal)
 	_lamps(parent, metal, lamp)
@@ -157,6 +158,45 @@ static func _markings(parent: Node3D, paint: Material) -> void:
 	var dash := BoxMesh.new()
 	dash.size = Vector3(0.14, 0.02, 3.2)
 	_multimesh(parent, dash, transforms, paint, AABB(Vector3(-14, 0, -1100), Vector3(28, 2, 1200)))
+
+static func _surface_details(parent: Node3D, paint: Material, metal: Material) -> void:
+	# Expansion joints every 40 m: a thin dark seam across the carriageway.
+	var joints: Array[Transform3D] = []
+	var z: float = 40.0
+	while z > -1085.0:
+		joints.append(Transform3D(Basis.IDENTITY, Vector3(0, 0.135, z)))
+		z -= 40.0
+	var joint_mesh := BoxMesh.new()
+	joint_mesh.size = Vector3(25.4, 0.03, 0.35)
+	_multimesh(parent, joint_mesh, joints, metal, AABB(Vector3(-13, 0, -1100), Vector3(26, 1, 1200)))
+	# Direction arrows: each lane points the way traffic travels on that side.
+	var arrow_material := _mat(Color("e9e5d8"), 0.65, 0.0)
+	arrow_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var arrows: Array[Transform3D] = []
+	for lane: float in [-10.0, -6.0, -2.0, 2.0, 6.0, 10.0]:
+		var reverse: bool = lane < 0.0
+		for i in range(9):
+			var lane_z: float = (20.0 - i * 120.0) if not reverse else (-20.0 - i * 120.0)
+			var basis := Basis(Vector3.UP, PI) if reverse else Basis.IDENTITY
+			arrows.append(Transform3D(basis, Vector3(lane, 0.145, lane_z)))
+	_multimesh(parent, _arrow_mesh(), arrows, arrow_material, AABB(Vector3(-12, 0, -1100), Vector3(24, 1, 1200)))
+
+static func _arrow_mesh() -> ArrayMesh:
+	var vertices := PackedVector3Array([
+		Vector3(-0.22, 0, 1.0), Vector3(0.22, 0, 1.0), Vector3(0.22, 0, 0.0),
+		Vector3(-0.22, 0, 1.0), Vector3(0.22, 0, 0.0), Vector3(-0.22, 0, 0.0),
+		Vector3(-0.8, 0, 0.0), Vector3(0.8, 0, 0.0), Vector3(0, 0, -1.2),
+	])
+	var normals := PackedVector3Array()
+	for i in range(vertices.size()):
+		normals.append(Vector3.UP)
+	var arrays := []
+	arrays.resize(Mesh.ARRAY_MAX)
+	arrays[Mesh.ARRAY_VERTEX] = vertices
+	arrays[Mesh.ARRAY_NORMAL] = normals
+	var mesh := ArrayMesh.new()
+	mesh.add_surface_from_arrays(Mesh.PRIMITIVE_TRIANGLES, arrays)
+	return mesh
 
 # ── Towers and cables ────────────────────────────────────────────────────────
 

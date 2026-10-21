@@ -3,6 +3,8 @@ extends Node3D
 ## Main menu for the M1 slice: Priora on a lit podium, dark UI, five buttons.
 
 const SHOWCASE_SCENE := "res://scenes/showcase_bridge.tscn"
+const BACKDROP_SHADER := preload("res://scripts/shaders/m1_backdrop.gdshader")
+const SHADOW_SHADER := preload("res://scripts/shaders/m1_shadow.gdshader")
 
 var _camera: Camera3D
 var _car: Vehicle
@@ -92,10 +94,21 @@ func _build_stage() -> void:
 	podium.position = Vector3(0, -0.08, 0)
 	add_child(podium)
 
-	var backdrop_material := StandardMaterial3D.new()
-	backdrop_material.albedo_color = Color("0d1117")
-	backdrop_material.roughness = 0.95
-	backdrop_material.cull_mode = BaseMaterial3D.CULL_DISABLED
+	var shadow_material := ShaderMaterial.new()
+	shadow_material.shader = SHADOW_SHADER
+	var shadow_mesh := PlaneMesh.new()
+	shadow_mesh.size = Vector2(9.0, 5.4)
+	var shadow := MeshInstance3D.new()
+	shadow.mesh = shadow_mesh
+	shadow.material_override = shadow_material
+	shadow.position = Vector3(0, 0.004, 0)
+	shadow.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(shadow)
+
+	var backdrop_material := ShaderMaterial.new()
+	backdrop_material.shader = BACKDROP_SHADER
+	backdrop_material.set_shader_parameter("top_color", Color("1a2430"))
+	backdrop_material.set_shader_parameter("bottom_color", Color("070a0e"))
 	var backdrop_mesh := CylinderMesh.new()
 	backdrop_mesh.top_radius = 22.0
 	backdrop_mesh.bottom_radius = 22.0
@@ -126,6 +139,15 @@ func _build_stage() -> void:
 	add_child(front_fill)
 	front_fill.look_at(Vector3(0, 0.7, 0), Vector3.UP)
 
+	var back_rim := SpotLight3D.new()
+	back_rim.position = Vector3(5.4, 4.4, -5.6)
+	back_rim.light_color = Color("8fb4ff")
+	back_rim.light_energy = 8.0
+	back_rim.spot_range = 18.0
+	back_rim.spot_angle = 30.0
+	add_child(back_rim)
+	back_rim.look_at(Vector3(0, 0.9, 0), Vector3.UP)
+
 	var probe := ReflectionProbe.new()
 	probe.size = Vector3(30, 16, 30)
 	probe.position = Vector3(0, 5, 0)
@@ -149,6 +171,7 @@ func _build_car() -> void:
 	profile["paint"]["finish"] = "metallic"
 	profile["paint"]["tint_alpha"] = 0.35
 	VehicleTuningApplicator.apply_tuning(_car, profile)
+	CarDetails.attach_plates(_car)
 	_car.global_position = Vector3(0, 0.46, 0)
 	_car.global_rotation = Vector3(0, -0.55, 0)
 
@@ -163,8 +186,8 @@ func _build_camera() -> void:
 
 func _update_camera(delta: float) -> void:
 	_angle += delta * 0.09
-	var radius := 6.6
-	_camera.position = Vector3(sin(_angle) * radius, 2.35, cos(_angle) * radius)
+	var radius := 6.2
+	_camera.position = Vector3(sin(_angle) * radius, 2.25, cos(_angle) * radius)
 	_camera.look_at(Vector3(0, 0.9, 0), Vector3.UP)
 
 func _process(delta: float) -> void:
