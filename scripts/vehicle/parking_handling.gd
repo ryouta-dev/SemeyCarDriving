@@ -41,8 +41,8 @@ static func apply(vehicle: Vehicle) -> void:
 	vehicle.front_spring_length = 0.16
 	vehicle.rear_spring_length = 0.20
 	vehicle.suspension_stiffness_multiplier = 0.85
-	vehicle.front_damping_ratio = 0.34
-	vehicle.rear_damping_ratio = 0.38
+	vehicle.front_damping_ratio = 0.42
+	vehicle.rear_damping_ratio = 0.46
 	vehicle.front_arb_ratio = 0.18
 	vehicle.rear_arb_ratio = 0.18
 	# More grip, no drift bias: the car should hold its line at parking speeds.
