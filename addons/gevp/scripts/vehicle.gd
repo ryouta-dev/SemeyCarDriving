@@ -1100,6 +1100,19 @@ func complete_shift() -> void:
 	is_shifting = false
 	is_up_shifting = false
 
+func set_gear_instant(target : int) -> void:
+	## Jumps straight to a gear, cancelling any shift in progress. The P/R/N/D
+	## selector needs this: `shift()` only starts a timed shift away from neutral,
+	## so a polling loop waiting for `current_gear` would never advance.
+	target = clampi(target, -1, gear_ratios.size())
+	if target == -1:
+		brake_amount = 0.0
+	current_gear = target
+	requested_gear = target
+	is_shifting = false
+	is_up_shifting = false
+	clutch_amount = 0.0
+
 func get_wheel_contact_count() -> int:
 	var contact_count := 0
 	for wheel in wheel_array:

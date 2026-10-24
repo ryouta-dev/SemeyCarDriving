@@ -44,13 +44,11 @@ func _apply_mode(mode: String) -> void:
 		"R":
 			vehicle.freeze = false
 			vehicle.automatic_transmission = false
-			while vehicle.current_gear > -1:
-				vehicle.shift(-1)
+			vehicle.set_gear_instant(Transmission.GEAR_REVERSE)
 		"N":
 			vehicle.freeze = false
 			vehicle.automatic_transmission = false
-			while vehicle.current_gear != 0:
-				vehicle.shift(-1 if vehicle.current_gear > 0 else 1)
+			vehicle.set_gear_instant(Transmission.GEAR_NEUTRAL)
 		"D":
 			vehicle.freeze = false
 			vehicle.automatic_transmission = true

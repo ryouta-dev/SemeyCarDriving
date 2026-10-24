@@ -171,7 +171,8 @@ func _run() -> void:
 	_check(showcase.get_node_or_null("KmPosts") != null, "M1 bridge kilometre posts")
 	_check(showcase.get_node_or_null("TowerDetails") != null, "M1 bridge tower details")
 	_check(showcase.get_node_or_null("EmbankmentProps") != null, "M1 embankment props")
-	_check(showcase.light_lenses != null and showcase.light_lenses.has_node("TailLeft"), "M1 car light lenses attached")
+	_check(showcase.light_lenses != null, "M1 car light lenses attached")
+	_check(showcase.light_lenses != null and showcase.light_lenses.get_meta("tail_materials", []).size() > 0, "M1 tail lamps use the optics material")
 	_check(showcase.get_node_or_null("Traffic") != null, "M1 traffic flow exists")
 	var traffic_cars := showcase.get_node_or_null("Traffic/Cars")
 	var car_count: int = traffic_cars.get_child_count() if traffic_cars != null else 0
@@ -187,6 +188,17 @@ func _run() -> void:
 	showcase.hud._select_gear("D")
 	var driving: bool = await _wait_until(func(): return not showcase.vehicle.freeze, 30)
 	_check(driving, "M1 D unfreezes the car")
+	# R and N used to poll `Vehicle.shift()` in a while loop, which never leaves
+	# the timed shift and froze the game; both must select the gear instantly.
+	showcase.hud._select_gear("N")
+	var neutral: bool = await _wait_until(func(): return showcase.vehicle.current_gear == 0, 30)
+	_check(neutral, "M1 N selects neutral")
+	showcase.hud._select_gear("R")
+	var reversing: bool = await _wait_until(func(): return showcase.vehicle.current_gear == Transmission.GEAR_REVERSE, 30)
+	_check(reversing, "M1 R selects reverse")
+	showcase.hud._select_gear("D")
+	var forward: bool = await _wait_until(func(): return showcase.vehicle.automatic_transmission, 30)
+	_check(forward, "M1 D restores the automatic box")
 	showcase.hud._toggle_pause()
 	_check(paused and showcase.hud.is_paused(), "M1 pause works")
 	showcase.hud._toggle_pause()

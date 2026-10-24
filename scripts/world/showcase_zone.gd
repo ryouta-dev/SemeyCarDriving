@@ -25,8 +25,18 @@ var traffic: TrafficFlow
 var _profile: Dictionary
 
 func _ready() -> void:
-	_profile = ProfileManager.load_profile()
+	# The M1 slice always drives the stock Priora: a saved 0.0.4 garage profile
+	# could carry an extreme stance or a swapped engine and break the hero car.
+	_profile = ProfileManager.get_default_profile()
 	_profile["car"]["selected_car"] = PRIORA
+	_profile["settings"]["quality"] = "high"
+	_profile["paint"] = {
+		"color": [0.72, 0.73, 0.75, 1.0],
+		"finish": "metallic",
+		"tint_alpha": 0.35,
+		"rim_color": [0.8, 0.81, 0.83, 1.0],
+		"rim_finish": "metallic",
+	}
 	_build_environment()
 	_build_water_and_banks()
 	BridgeBuilder.build(self)
@@ -369,7 +379,7 @@ func _physics_process(_delta: float) -> void:
 
 func _process(_delta: float) -> void:
 	CarDetails.update_rear_lights(rear_lights, vehicle)
-	CarDetails.update_light_lenses(light_lenses, vehicle, headlights != null and headlights.visible)
+	CarDetails.update_light_lenses(light_lenses, vehicle)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:

@@ -30,6 +30,18 @@ func _run() -> void:
 	sight_seer.current = true
 	await _wait(30)
 	_capture("embankment.png")
+	# Fourth shot: the hero car from the side, to judge ride height and lamps.
+	zone.hud._select_gear("P")
+	await _wait(12)
+	var hero: Vector3 = zone.vehicle.global_position
+	var car_view := Camera3D.new()
+	car_view.fov = 42.0
+	root.add_child(car_view)
+	car_view.position = hero + Vector3(6.4, 1.7, -1.6)
+	car_view.look_at(hero + Vector3(0.0, 0.75, -0.15))
+	car_view.current = true
+	await _wait(20)
+	_capture("car.png")
 	zone.queue_free()
 	await _wait(5)
 	quit()
