@@ -21,6 +21,15 @@ func _run() -> void:
 	root.add_child(zone)
 	await _wait(150)
 	_capture("bridge.png")
+	# Third shot: the river pier and the stairs, seen from the water side.
+	var sight_seer := Camera3D.new()
+	sight_seer.position = Vector3(158.0, 5.0, 24.0)
+	sight_seer.fov = 50.0
+	root.add_child(sight_seer)
+	sight_seer.look_at(Vector3(112.0, -2.0, 58.0))
+	sight_seer.current = true
+	await _wait(30)
+	_capture("embankment.png")
 	zone.queue_free()
 	await _wait(5)
 	quit()

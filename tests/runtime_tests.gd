@@ -168,6 +168,19 @@ func _run() -> void:
 	_check(showcase.get_node_or_null("BridgeDeck") != null, "M1 bridge deck built")
 	_check(showcase.get_node_or_null("CameraRig") != null, "M1 camera rig exists")
 	_check(showcase.hud != null and is_instance_valid(showcase.hud._speedometer), "M1 HUD built")
+	_check(showcase.get_node_or_null("KmPosts") != null, "M1 bridge kilometre posts")
+	_check(showcase.get_node_or_null("TowerDetails") != null, "M1 bridge tower details")
+	_check(showcase.get_node_or_null("EmbankmentProps") != null, "M1 embankment props")
+	_check(showcase.light_lenses != null and showcase.light_lenses.has_node("TailLeft"), "M1 car light lenses attached")
+	_check(showcase.get_node_or_null("Traffic") != null, "M1 traffic flow exists")
+	var traffic_cars := showcase.get_node_or_null("Traffic/Cars")
+	var car_count: int = traffic_cars.get_child_count() if traffic_cars != null else 0
+	_check(car_count >= 6 and car_count <= 10, "M1 traffic car count 6..10")
+	if traffic_cars != null and car_count > 0:
+		var lead_car := traffic_cars.get_child(0) as Node3D
+		var start_z: float = lead_car.position.z
+		var moved: bool = await _wait_until(func(): return absf(lead_car.position.z - start_z) > 0.5, 60)
+		_check(moved, "M1 traffic cars move")
 	showcase.hud._select_gear("P")
 	var parked: bool = await _wait_until(func(): return showcase.vehicle.freeze, 30)
 	_check(parked, "M1 P freezes the car")

@@ -26,7 +26,9 @@ static func build(parent: Node3D) -> void:
 	var asphalt := _mat(Color("3a3f46"), 0.92, 0.0)
 	asphalt.albedo_texture = _noise_texture()
 	asphalt.uv1_scale = Vector3(6, 220, 1)
-	var metal := _mat(Color("c8ccd3"), 0.30, 0.90)
+	var metal := _mat(Color("c8ccd3"), 0.42, 0.80)
+	metal.albedo_texture = _noise_texture()
+	metal.uv1_scale = Vector3(1.5, 1.5, 1.5)
 	var paint := _mat(Color("e9e5d8"), 0.72, 0.0)
 	var lamp := _mat(Color("d9d4c6"), 0.45, 0.0)
 	lamp.emission_enabled = true
@@ -37,7 +39,10 @@ static func build(parent: Node3D) -> void:
 	_markings(parent, paint)
 	_surface_details(parent, paint, metal)
 	_towers(parent, concrete, metal)
+	_tower_details(parent, concrete, metal)
+	_deck_girders(parent, concrete)
 	_cables(parent, metal)
+	_km_posts(parent, paint)
 	_lamps(parent, metal, lamp)
 
 static func _noise_texture() -> NoiseTexture2D:
@@ -263,3 +268,66 @@ static func _lamps(parent: Node3D, metal: Material, lamp: Material) -> void:
 	var head_mesh := BoxMesh.new()
 	head_mesh.size = Vector3.ONE
 	_multimesh(parent, head_mesh, heads, lamp, AABB(Vector3(-16, 8, -1100), Vector3(32, 2, 1200)))
+
+# ── Structural details ───────────────────────────────────────────────────────
+
+## Piers, capitals, cable saddles and braces so the 55 m pylons read as concrete
+## towers rather than bare boxes when seen from the water or the embankment.
+static func _tower_details(parent: Node3D, concrete: Material, metal: Material) -> void:
+	var root := Node3D.new()
+	root.name = "TowerDetails"
+	parent.add_child(root)
+	for z: float in TOWER_Z:
+		for x: float in [-TOWER_LEG_X, TOWER_LEG_X]:
+			# Pier footing standing in the river below the leg.
+			_box(root, Vector3(7.0, 9.2, 9.4), Vector3(x, -4.4, z), concrete)
+			# Capital under the deck and the saddle housing on top.
+			_box(root, Vector3(4.6, 1.0, 5.2), Vector3(x, -1.4, z), concrete)
+			_box(root, Vector3(4.4, 0.6, 5.0), Vector3(x, 51.0, z), concrete)
+			_box(root, Vector3(3.8, 0.8, 4.4), Vector3(x, 51.7, z), metal)
+		# Cross tie below the deck and diagonal struts up to the capitals.
+		_box(root, Vector3(27.4, 0.9, 1.2), Vector3(0, -4.4, z), concrete)
+		for side: float in [-1.0, 1.0]:
+			var strut := _box(root, Vector3(0.55, 9.0, 0.7), Vector3(side * 9.2, -5.0, z), concrete)
+			strut.rotation_degrees.z = side * 26.0
+	# Abutment anchor blocks just inside both ends of the deck.
+	for z: float in [57.0, -1097.0]:
+		for x: float in [-11.8, 11.8]:
+			_box(root, Vector3(3.2, 2.6, 4.4), Vector3(x, 0.2, z), concrete)
+
+## Longitudinal girders and cross diaphragms under the deck.
+static func _deck_girders(parent: Node3D, concrete: Material) -> void:
+	var root := Node3D.new()
+	root.name = "DeckGirders"
+	parent.add_child(root)
+	for x: float in [-11.0, -5.5, 0.0, 5.5, 11.0]:
+		_box(root, Vector3(0.7, 1.5, LENGTH - 8.0), Vector3(x, -1.75, DECK_MID), concrete)
+	var ribs: Array[Transform3D] = []
+	var z: float = 30.0
+	while z > -1090.0:
+		ribs.append(Transform3D(Basis.IDENTITY, Vector3(0, -2.35, z)))
+		z -= 40.0
+	var rib_mesh := BoxMesh.new()
+	rib_mesh.size = Vector3(WIDTH - 2.0, 0.55, 0.6)
+	_multimesh(root, rib_mesh, ribs, concrete, AABB(Vector3(-13, -3, -1100), Vector3(26, 3, 1200)))
+
+## Kilometre posts along both footways, white with a dark band, every 100 m.
+static func _km_posts(parent: Node3D, paint: Material) -> void:
+	var root := Node3D.new()
+	root.name = "KmPosts"
+	parent.add_child(root)
+	var posts: Array[Transform3D] = []
+	var bands: Array[Transform3D] = []
+	var z: float = 40.0
+	while z > -1090.0:
+		for x: float in [-11.9, 11.9]:
+			posts.append(Transform3D(Basis.IDENTITY, Vector3(x, 0.75, z)))
+			bands.append(Transform3D(Basis.IDENTITY, Vector3(x, 1.05, z)))
+		z -= 100.0
+	var post_mesh := BoxMesh.new()
+	post_mesh.size = Vector3(0.22, 0.9, 0.18)
+	_multimesh(root, post_mesh, posts, paint, AABB(Vector3(-13, 0, -1100), Vector3(26, 2, 1200)))
+	var band_mesh := BoxMesh.new()
+	band_mesh.size = Vector3(0.24, 0.18, 0.2)
+	var dark := _mat(Color("2b2f34"), 0.75, 0.0)
+	_multimesh(root, band_mesh, bands, dark, AABB(Vector3(-13, 0, -1100), Vector3(26, 2, 1200)))

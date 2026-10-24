@@ -5,8 +5,10 @@ extends Node3D
 ## first slice has zero paid dependencies.
 
 const PRIORA := "priora"
-const SPAWN_POSITION := Vector3(0.0, 1.0, -150.0)
+const SPAWN_POSITION := Vector3(6.0, 1.0, -150.0)
 const RESET_Y := -30.0
+const PIER_X := 120.0
+const PIER_GAP := 5.0
 const SKY_SHADER := preload("res://scripts/shaders/m1_sky.gdshader")
 const WATER_SHADER := preload("res://scripts/shaders/m1_water.gdshader")
 
@@ -17,6 +19,8 @@ var controller: DriveController
 var headlights: Node3D
 var engine_sound: EngineSound
 var rear_lights: Node3D
+var light_lenses: Node3D
+var traffic: TrafficFlow
 
 var _profile: Dictionary
 
@@ -27,9 +31,11 @@ func _ready() -> void:
 	_build_water_and_banks()
 	BridgeBuilder.build(self)
 	_build_embankment()
+	_build_promenade_props()
 	_build_city()
 	_spawn_car()
 	_build_headlights()
+	_spawn_traffic()
 	_setup_camera()
 	_setup_hud()
 	_setup_audio()
@@ -140,17 +146,15 @@ func _build_embankment() -> void:
 	var parapet := StaticBody3D.new()
 	parapet.position = Vector3(0, 0.55, 58.8)
 	add_child(parapet)
-	var parapet_mesh := BoxMesh.new()
-	parapet_mesh.size = Vector3(420, 1.1, 0.5)
-	var parapet_instance := MeshInstance3D.new()
-	parapet_instance.mesh = parapet_mesh
-	parapet_instance.material_override = concrete
-	parapet.add_child(parapet_instance)
 	var parapet_shape := CollisionShape3D.new()
 	var parapet_box := BoxShape3D.new()
-	parapet_box.size = parapet_mesh.size
+	# Collision stays continuous so a car cannot slip through the stair gap.
+	parapet_box.size = Vector3(420, 1.1, 0.5)
 	parapet_shape.shape = parapet_box
 	parapet.add_child(parapet_shape)
+	# The visible wall has a gap where the stairs go down to the river pier.
+	for span: Vector2 in _parapet_spans():
+		_box(parapet, Vector3(span.y - span.x, 1.1, 0.5), Vector3((span.x + span.y) * 0.5, 0.0, 0.0), concrete)
 	# Benches.
 	for i in range(6):
 		_box(self, Vector3(2.2, 0.45, 0.6), Vector3(-150 + i * 60, 0.35, 67), dark)
@@ -187,7 +191,84 @@ func _build_embankment() -> void:
 	var head_mesh := BoxMesh.new()
 	head_mesh.size = Vector3.ONE
 	_multimesh(self, head_mesh, heads, lamp_material)
-	_box(self, Vector3(420, 0.25, 0.3), Vector3(0, 0.86, 58.8), paint)
+	for span: Vector2 in _parapet_spans():
+		_box(self, Vector3(span.y - span.x, 0.25, 0.3), Vector3((span.x + span.y) * 0.5, 0.86, 58.8), paint)
+
+## Visible parapet runs, split around the pedestrian stair gap.
+static func _parapet_spans() -> Array[Vector2]:
+	var spans: Array[Vector2] = []
+	var half: float = PIER_GAP * 0.5
+	spans.append(Vector2(-210.0, PIER_X - half))
+	spans.append(Vector2(PIER_X + half, 210.0))
+	return spans
+
+## Small promenade props: litter bins, bushes and the river pier with its stair
+## flight. All are MultiMesh batches except the pier and the cheek walls.
+func _build_promenade_props() -> void:
+	var root := Node3D.new()
+	root.name = "EmbankmentProps"
+	add_child(root)
+	var metal := _material(Color("2f3438"), 0.55, 0.6)
+	var concrete := _material(Color("bcb7ad"), 0.82, 0.0)
+	var rng := RandomNumberGenerator.new()
+	rng.seed = 20261024
+	var bins: Array[Transform3D] = []
+	for i in range(6):
+		bins.append(Transform3D(Basis.from_scale(Vector3(0.24, 0.78, 0.24)), Vector3(-150.0 + i * 60.0 + 2.4, 0.39, 66.6)))
+	_multimesh(root, truncate_cylinder(8), bins, metal)
+	# Low bushes along the back edge of the promenade.
+	var bushes: Array[Transform3D] = []
+	for i in range(26):
+		var scale: float = rng.randf_range(0.75, 1.25)
+		bushes.append(Transform3D(
+			Basis.from_scale(Vector3(1.5, 0.95, 1.5) * scale),
+			Vector3(-190.0 + i * 15.2, 0.55 * scale, 84.0 + rng.randf_range(-1.2, 1.2))))
+	var bush_mesh := SphereMesh.new()
+	bush_mesh.radius = 1.0
+	bush_mesh.height = 1.8
+	_multimesh(root, bush_mesh, bushes, _material(Color("46613c"), 0.95, 0.0))
+	# Stone revetment wall below the promenade, covering the raw bank face.
+	for span: Vector2 in _parapet_spans():
+		_box(root, Vector3(span.y - span.x, 8.6, 0.8), Vector3((span.x + span.y) * 0.5, -4.2, 58.2), concrete)
+	_pier_and_stairs(root, concrete, metal)
+
+func _pier_and_stairs(root: Node3D, concrete: Material, metal: Material) -> void:
+	var pier_y := -6.0
+	_box(root, Vector3(15.0, 0.5, 10.4), Vector3(PIER_X, pier_y - 0.25, 51.0), concrete)
+	# Piers holding the landing up, from below the waterline to the slab.
+	for side: float in [-1.0, 1.0]:
+		for dz: float in [-4.2, 3.8]:
+			_box(root, Vector3(0.7, 2.6, 0.7), Vector3(PIER_X + side * 6.4, pier_y - 1.2, 51.0 + dz), concrete)
+	# Safety rail on the water side of the pier.
+	var rail := _box(root, Vector3(14.6, 0.08, 0.08), Vector3(PIER_X, pier_y + 0.95, 46.2), metal)
+	rail.name = "PierRail"
+	var posts: Array[Transform3D] = []
+	for i in range(6):
+		posts.append(Transform3D(Basis.from_scale(Vector3(0.07, 0.95, 0.07)), Vector3(PIER_X - 7.0 + i * 2.8, pier_y + 0.47, 46.2)))
+	_multimesh(root, truncate_cylinder(6), posts, metal)
+	# Stair flight from the promenade slab down to the pier: 12 treads.
+	var drop: float = 6.0 / 12.0
+	var run: float = 12.0 * 0.42
+	var steps: Array[Transform3D] = []
+	for i in range(12):
+		var tread_y: float = 0.2 - (i + 1) * drop
+		steps.append(Transform3D(Basis.IDENTITY, Vector3(PIER_X, tread_y - drop * 0.5, 58.4 - (i + 0.5) * 0.42)))
+	var step_mesh := BoxMesh.new()
+	step_mesh.size = Vector3(PIER_GAP, drop, 0.42)
+	_multimesh(root, step_mesh, steps, concrete)
+	# Sloped cheek walls framing the flight.
+	var rise: float = 6.0
+	var length: float = sqrt(run * run + rise * rise)
+	var slope_deg: float = rad_to_deg(atan2(rise, run))
+	for side: float in [-1.0, 1.0]:
+		var wall := _box(root, Vector3(0.35, 0.7, length), Vector3(PIER_X + side * (PIER_GAP * 0.5 + 0.2), -2.8, 58.4 - run * 0.5), concrete)
+		wall.rotation_degrees.x = 180.0 - slope_deg
+
+## Visual traffic on the bridge. The flow node owns its own cars and motion.
+func _spawn_traffic() -> void:
+	traffic = TrafficFlow.new()
+	traffic.name = "Traffic"
+	add_child(traffic)
 
 func _build_city() -> void:
 	var transforms: Array[Transform3D] = []
@@ -232,6 +313,7 @@ func _spawn_car() -> void:
 	vehicle.set_physics_process(true)
 	CarDetails.attach_plates(vehicle)
 	rear_lights = CarDetails.attach_rear_lights(vehicle)
+	light_lenses = CarDetails.attach_light_lenses(vehicle)
 
 func _build_headlights() -> void:
 	if vehicle == null:
@@ -287,6 +369,7 @@ func _physics_process(_delta: float) -> void:
 
 func _process(_delta: float) -> void:
 	CarDetails.update_rear_lights(rear_lights, vehicle)
+	CarDetails.update_light_lenses(light_lenses, vehicle, headlights != null and headlights.visible)
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
