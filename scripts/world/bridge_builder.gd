@@ -125,6 +125,10 @@ static func _deck(parent: Node3D, concrete: Material, asphalt: Material) -> void
 	_box(body, deck_size, Vector3(0, -0.6, DECK_MID), concrete)
 	_add_box_collider(body, deck_size, Vector3(0, -0.6, DECK_MID))
 	_box(body, Vector3(WIDTH - 2.0, 0.12, LENGTH), Vector3(0, 0.06, DECK_MID), asphalt)
+	# The carriageway visual sits 0.12 m above the deck box, so the wheels must
+	# collide with it, not with the deck: otherwise the car is drawn sunk into the
+	# asphalt by that much and the body clips through the road while driving.
+	_add_box_collider(body, Vector3(WIDTH - 2.0, 0.12, LENGTH), Vector3(0, 0.06, DECK_MID))
 	for x: float in [-12.2, 12.2]:
 		var walk_size := Vector3(1.6, 0.3, LENGTH)
 		_box(body, walk_size, Vector3(x, 0.15, DECK_MID), concrete)
