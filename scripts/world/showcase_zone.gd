@@ -338,6 +338,8 @@ func _spawn_car() -> void:
 	vehicle.set_physics_process(false)
 	add_child(vehicle)
 	VehicleTuningApplicator.apply_tuning(vehicle, _profile)
+	# M1.2: override the garage handling presets with the parking-lot feel.
+	ParkingHandling.apply(vehicle)
 	vehicle.global_position = SPAWN_POSITION
 	vehicle.global_rotation = Vector3.ZERO
 	vehicle.linear_velocity = Vector3.ZERO

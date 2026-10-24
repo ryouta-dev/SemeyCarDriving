@@ -165,6 +165,8 @@ func _run() -> void:
 	root.add_child(showcase)
 	var showcase_ready: bool = await _wait_until(func(): return is_instance_valid(showcase.vehicle) and not showcase.vehicle.freeze, 300)
 	_check(showcase_ready, "M1 showcase car activated")
+	_check(showcase.vehicle.countersteer_assist == 0.0, "M1 parking handling: no countersteer assist")
+	_check(absf(showcase.vehicle.max_steering_angle - deg_to_rad(38.0)) < 0.01, "M1 parking handling: steering lock")
 	_check(showcase.get_node_or_null("BridgeDeck") != null, "M1 bridge deck built")
 	_check(showcase.get_node_or_null("CameraRig") != null, "M1 camera rig exists")
 	# Free look: a mouse drag must swing the camera and release must spring it back.
@@ -216,6 +218,9 @@ func _run() -> void:
 	showcase.hud._select_gear("D")
 	var forward: bool = await _wait_until(func(): return showcase.vehicle.automatic_transmission, 30)
 	_check(forward, "M1 D restores the automatic box")
+	# Creep: with no pedal input the automatic must pull the car to ~6 km/h.
+	var creeping: bool = await _wait_until(func(): return showcase.vehicle.linear_velocity.length() * 3.6 > 2.0, 150)
+	_check(creeping, "M1 automatic creeps in D")
 	showcase.hud._toggle_pause()
 	_check(paused and showcase.hud.is_paused(), "M1 pause works")
 	showcase.hud._toggle_pause()
