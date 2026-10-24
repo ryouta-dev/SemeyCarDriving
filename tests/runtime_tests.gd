@@ -166,6 +166,7 @@ func _run() -> void:
 	var showcase_ready: bool = await _wait_until(func(): return is_instance_valid(showcase.vehicle) and not showcase.vehicle.freeze, 300)
 	_check(showcase_ready, "M1 showcase car activated")
 	_check(showcase.vehicle.countersteer_assist == 0.0, "M1 parking handling: no countersteer assist")
+	_check(showcase.vehicle.steering_slip_assist >= 0.3, "M1 parking handling: slip assist does not block steering")
 	_check(absf(showcase.vehicle.max_steering_angle - deg_to_rad(38.0)) < 0.01, "M1 parking handling: steering lock")
 	_check(showcase.get_node_or_null("BridgeDeck") != null, "M1 bridge deck built")
 	_check(showcase.get_node_or_null("CameraRig") != null, "M1 camera rig exists")
@@ -201,13 +202,17 @@ func _run() -> void:
 		var start_z: float = lead_car.position.z
 		var moved: bool = await _wait_until(func(): return absf(lead_car.position.z - start_z) > 0.5, 60)
 		_check(moved, "M1 traffic cars move")
+	# Park stops the car with the brakes instead of freezing the body: freezing a
+	# rigid body and unfreezing it made the car pop up into the air.
 	showcase.hud._select_gear("P")
-	var parked: bool = await _wait_until(func(): return showcase.vehicle.freeze, 30)
-	_check(parked, "M1 P freezes the car")
+	var parked: bool = await _wait_until(func(): return showcase.vehicle.linear_velocity.length() < 0.2, 240)
+	_check(parked, "M1 P stops the car with the brakes")
+	_check(not showcase.vehicle.freeze, "M1 P does not freeze the body")
+	_check(showcase.vehicle.current_gear == 0, "M1 P selects neutral")
 	showcase.hud._select_gear("D")
-	var driving: bool = await _wait_until(func(): return not showcase.vehicle.freeze, 30)
-	_check(driving, "M1 D unfreezes the car")
-	# R and N used to poll `Vehicle.shift()` in a while loop, which never leaves
+	var driving: bool = await _wait_until(func(): return showcase.vehicle.automatic_transmission, 60)
+	_check(driving, "M1 D restores the automatic box")
+	# N and R used to poll `Vehicle.shift()` in a while loop, which never leaves
 	# the timed shift and froze the game; both must select the gear instantly.
 	showcase.hud._select_gear("N")
 	var neutral: bool = await _wait_until(func(): return showcase.vehicle.current_gear == 0, 30)
@@ -215,11 +220,15 @@ func _run() -> void:
 	showcase.hud._select_gear("R")
 	var reversing: bool = await _wait_until(func(): return showcase.vehicle.current_gear == Transmission.GEAR_REVERSE, 30)
 	_check(reversing, "M1 R selects reverse")
+	for i in range(60):
+		await physics_frame
+	# Switching R -> D must leave the reverse gear, not keep reversing.
 	showcase.hud._select_gear("D")
-	var forward: bool = await _wait_until(func(): return showcase.vehicle.automatic_transmission, 30)
-	_check(forward, "M1 D restores the automatic box")
+	var left_reverse: bool = await _wait_until(func():
+		return showcase.vehicle.current_gear >= 0 and showcase.vehicle.automatic_transmission, 90)
+	_check(left_reverse, "M1 D leaves reverse gear")
 	# Creep: with no pedal input the automatic must pull the car to ~6 km/h.
-	var creeping: bool = await _wait_until(func(): return showcase.vehicle.linear_velocity.length() * 3.6 > 2.0, 150)
+	var creeping: bool = await _wait_until(func(): return showcase.vehicle.linear_velocity.length() * 3.6 > 2.0, 240)
 	_check(creeping, "M1 automatic creeps in D")
 	showcase.hud._toggle_pause()
 	_check(paused and showcase.hud.is_paused(), "M1 pause works")

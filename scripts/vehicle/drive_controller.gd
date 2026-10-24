@@ -27,8 +27,13 @@ func _physics_process(delta: float) -> void:
 	_steer = move_toward(_steer, target, rate * delta)
 	var along_kmh: float = _along_gear_speed_kmh()
 	if _mode == "P":
+		# Parking holds the car with the brakes instead of freezing the body: a
+		# frozen rigid body pops up when it is unfrozen again.
 		throttle = 0.0
 		brake = 1.0
+		if vehicle.linear_velocity.length() < 0.2:
+			vehicle.linear_velocity = Vector3.ZERO
+			vehicle.angular_velocity = Vector3.ZERO
 	else:
 		_update_brake_hold(delta, brake, throttle, along_kmh)
 		brake = _held_brake(brake)
@@ -87,9 +92,9 @@ func _apply_mode(mode: String) -> void:
 	_hold_timer = 0.0
 	match mode:
 		"P":
-			vehicle.freeze = true
-			vehicle.linear_velocity = Vector3.ZERO
-			vehicle.angular_velocity = Vector3.ZERO
+			# Park: disengage the box and let the brakes stop the car smoothly.
+			vehicle.automatic_transmission = false
+			vehicle.set_gear_instant(Transmission.GEAR_NEUTRAL)
 		"R":
 			vehicle.freeze = false
 			vehicle.automatic_transmission = false
@@ -100,4 +105,8 @@ func _apply_mode(mode: String) -> void:
 			vehicle.set_gear_instant(Transmission.GEAR_NEUTRAL)
 		"D":
 			vehicle.freeze = false
+			# Leaving R the box is still in reverse; the automatic only shifts
+			# forward from neutral, so reset it before handing over to the auto.
+			if vehicle.current_gear < 0:
+				vehicle.set_gear_instant(Transmission.GEAR_NEUTRAL)
 			vehicle.automatic_transmission = true

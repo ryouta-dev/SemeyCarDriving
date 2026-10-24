@@ -20,12 +20,14 @@ static func apply(vehicle: Vehicle) -> void:
 	if not is_instance_valid(vehicle):
 		return
 	# Steering: slow, hydraulically damped ramps; no drift assists at all.
-	vehicle.steering_speed = 2.8
-	vehicle.countersteer_speed = 5.0
+	# `steering_slip_assist` must stay generous: at 0 the GEVP steering assist
+	# treats any wheel slip as "stop steering" and the car barely turns at all.
+	vehicle.steering_speed = 4.0
+	vehicle.countersteer_speed = 6.0
 	vehicle.countersteer_assist = 0.0
-	vehicle.steering_slip_assist = 0.0
-	vehicle.steering_exponent = 1.2
-	vehicle.steering_speed_decay = 0.55
+	vehicle.steering_slip_assist = 0.6
+	vehicle.steering_exponent = 1.0
+	vehicle.steering_speed_decay = 0.30
 	vehicle.max_steering_angle = deg_to_rad(38.0)
 	# Pedals ramp like a heavy car: smooth from standstill, no clutch kick.
 	vehicle.throttle_speed = 7.0
