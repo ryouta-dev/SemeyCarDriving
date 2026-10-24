@@ -54,6 +54,7 @@ fog_aerial_perspective = 0.5
 
 [node name="Main" type="Node3D" node_paths=PackedStringArray("tile_manager", "sky_controller", "weather_controller", "street_lamp_lights", "vehicle", "headlights", "mobile_controls")]
 script = ExtResource("1_world")
+physics_interpolation_mode = 2
 tile_manager = NodePath("OSMTileManager")
 sky_controller = NodePath("SkyController")
 weather_controller = NodePath("WeatherController")

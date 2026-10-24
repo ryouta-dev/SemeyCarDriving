@@ -33,6 +33,7 @@ albedo_color = Color(0.2, 0.55, 1, 1)
 
 [node name="Garage" type="Node3D" node_paths=PackedStringArray("vehicle", "garage_ui", "camera_rig")]
 script = ExtResource("1_controller")
+physics_interpolation_mode = 2
 vehicle = NodePath("ShowroomCar")
 garage_ui = NodePath("GarageUI")
 camera_rig = NodePath("GarageCamera")

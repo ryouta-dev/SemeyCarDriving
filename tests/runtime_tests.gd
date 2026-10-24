@@ -25,6 +25,11 @@ func _wait_until(predicate: Callable, max_frames: int = 600) -> bool:
 		await process_frame
 	return false
 
+## Run the camera rig for one nominal frame so a test reads exactly what the
+## player would see after the input it just simulated.
+func _initialise_rig(rig: VehicleCameraRig) -> void:
+	rig._update_camera(0.016)
+
 func _run() -> void:
 	var corrupt := {"paint": {"color": [1], "tint_alpha": "bad"}, "stance": {"stiffness": -100},
 		"engine": {"engine_id": "unknown"}, "camera": {"mode": 900}}
@@ -187,6 +192,54 @@ func _run() -> void:
 	look_release.pressed = false
 	Input.parse_input_event(look_release)
 	await process_frame
+	# Camera rework: four modes, correct vertical look direction and sane heights.
+	var hero: Vehicle = showcase.vehicle
+	var cam: Camera3D = rig.camera
+	_check(rig.mode == VehicleCameraRig.Mode.CHASE_NEAR, "M1 camera starts in close chase mode")
+	_initialise_rig(rig)
+	var close_height: float = cam.global_position.y - hero.global_position.y
+	_check(close_height > 0.75 and close_height < 1.15, "M1 close chase camera is low")
+	var close_distance: float = cam.global_position.distance_to(hero.global_position)
+	_check(close_distance > 4.0 and close_distance < 5.3, "M1 close chase camera is close")
+	_check(cam.global_transform.basis.y.y > 0.9, "M1 chase horizon is level")
+	# Down drag must look DOWN and lift the camera; up drag must look up but never
+	# put the camera under the bridge deck.
+	rig._add_look(Vector2(0.0, 120.0))
+	_initialise_rig(rig)
+	_check(rig._look_pitch > 0.0, "M1 drag down looks down")
+	_check(cam.global_position.y > hero.global_position.y + close_height + 0.1, "M1 drag down raises the chase camera")
+	rig._look_pitch = VehicleCameraRig.LOOK_PITCH_MIN
+	rig._look_yaw = 0.0
+	_initialise_rig(rig)
+	_check(cam.global_position.y > 0.2, "M1 look up keeps the camera above the road")
+	_check(cam.global_position.y < hero.global_position.y + 0.2, "M1 look up drops the camera to chassis level")
+	rig._look_pitch = 0.0
+	rig._look_yaw = 0.0
+	_initialise_rig(rig)
+	# Mode order: close -> medium -> bonnet -> cockpit -> close.
+	var mode_names: Array[String] = []
+	var first_mode: int = int(rig.mode)
+	for i in range(VehicleCameraRig.Mode.size()):
+		mode_names.append(rig.mode_name())
+		rig.cycle_mode()
+		_initialise_rig(rig)
+	_check(int(rig.mode) == first_mode, "M1 four camera modes wrap")
+	_check(mode_names.size() == 4 and mode_names[0] != mode_names[1] and mode_names[1] != mode_names[2] and mode_names[2] != mode_names[3], "M1 camera modes have distinct names")
+	# Bonnet camera sits above the hood, ahead of the windscreen.
+	rig.mode = VehicleCameraRig.Mode.HOOD
+	rig.snap()
+	var bonnet_local: Vector3 = hero.global_transform.affine_inverse() * cam.global_position
+	_check(bonnet_local.z < -0.8 and bonnet_local.z > -1.4, "M1 bonnet camera is over the hood")
+	_check(bonnet_local.y > 0.7 and bonnet_local.y < 0.95, "M1 bonnet camera stays at hood height")
+	# Cockpit camera is the driver's eye inside the cabin, not above the roof.
+	rig.mode = VehicleCameraRig.Mode.COCKPIT
+	rig.snap()
+	var cockpit_local: Vector3 = hero.global_transform.affine_inverse() * cam.global_position
+	_check(absf(cockpit_local.x) < 0.5, "M1 cockpit camera is on the driver's side")
+	_check(cockpit_local.y > 0.6 and cockpit_local.y < 0.9, "M1 cockpit camera is at eye height")
+	_check(absf(cockpit_local.z) < 1.5, "M1 cockpit camera is inside the wheelbase")
+	rig.mode = VehicleCameraRig.Mode.CHASE_NEAR
+	rig.snap()
 	_check(showcase.hud != null and is_instance_valid(showcase.hud._speedometer), "M1 HUD built")
 	_check(showcase.get_node_or_null("KmPosts") != null, "M1 bridge kilometre posts")
 	_check(showcase.get_node_or_null("TowerDetails") != null, "M1 bridge tower details")

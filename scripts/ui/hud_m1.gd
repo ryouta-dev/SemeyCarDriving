@@ -23,9 +23,16 @@ var _gear_buttons: Dictionary = {}
 var _speedometer: SpeedometerM1
 var _minimap: MinimapM1
 var _pause_layer: Control
+var _camera_hint: Label
+var _camera_hint_time := 0.0
 var _paused := false
 var _lights_on := false
 var _layout_pending := false
+
+## How long the camera-mode caption stays on screen after switching modes.
+const CAMERA_HINT_SECONDS := 1.4
+## Fade-out tail of that caption, in seconds.
+const CAMERA_HINT_FADE := 0.4
 
 func _ready() -> void:
 	layer = 10
@@ -52,6 +59,17 @@ func _build() -> void:
 	_minimap = MinimapM1.new()
 	_minimap.name = "Minimap"
 	_root.add_child(_minimap)
+
+	# Short caption under the top edge: which of the four camera modes is active.
+	# It only appears for a moment after the KAM button (or C) is pressed.
+	_camera_hint = Label.new()
+	_camera_hint.name = "CameraHint"
+	_camera_hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	_camera_hint.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	_camera_hint.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	_camera_hint.visible = false
+	ThemeM1.apply_label(_camera_hint, 24, ThemeM1.ACCENT)
+	_root.add_child(_camera_hint)
 
 	_wheel = VirtualSteeringWheel.new()
 	_wheel.name = "SteeringWheel"
@@ -150,6 +168,7 @@ func _apply_layout() -> void:
 	_place(_pause_button, Rect2(Vector2(margin, margin), Vector2(64, 64) * u))
 	_place(_camera_button, Rect2(Vector2(margin, margin + 76 * u), Vector2(64, 64) * u))
 	_place(_lights_button, Rect2(Vector2(margin + 76 * u, margin), Vector2(72, 64) * u))
+	_place(_camera_hint, Rect2(Vector2(viewport_size.x * 0.5 - 190 * u, margin + 4 * u), Vector2(380, 40) * u))
 	_place(_speedometer, Rect2(Vector2(viewport_size.x - 244 * u - margin, margin), Vector2(244, 244) * u))
 	_place(_wheel, Rect2(Vector2(margin, viewport_size.y - 300 * u), Vector2(260, 260) * u))
 	_place(_minimap, Rect2(Vector2(margin + 286 * u, viewport_size.y - 226 * u), Vector2(190, 190) * u))
@@ -204,13 +223,31 @@ func _update_gear_buttons() -> void:
 
 # ── Frame update ─────────────────────────────────────────────────────────────
 
-func _process(_delta: float) -> void:
+func _process(delta: float) -> void:
+	_tick_camera_hint(delta)
 	if _paused or not is_instance_valid(vehicle):
 		return
 	var speed_kmh: float = vehicle.linear_velocity.length() * 3.6
 	var ratio: float = clampf(vehicle.motor_rpm / maxf(1000.0, vehicle.max_rpm), 0.0, 1.0)
 	_speedometer.set_values(speed_kmh, ratio, _gear_label())
 	_minimap.set_car_position(vehicle.global_position)
+
+func _tick_camera_hint(delta: float) -> void:
+	if _camera_hint_time <= 0.0 or not is_instance_valid(_camera_hint):
+		return
+	_camera_hint_time -= delta
+	if _camera_hint_time <= 0.0:
+		_camera_hint.visible = false
+		return
+	_camera_hint.modulate.a = clampf(_camera_hint_time / CAMERA_HINT_FADE, 0.0, 1.0)
+
+func _show_camera_hint(text: String) -> void:
+	if not is_instance_valid(_camera_hint):
+		return
+	_camera_hint.text = text
+	_camera_hint.visible = true
+	_camera_hint.modulate.a = 1.0
+	_camera_hint_time = CAMERA_HINT_SECONDS
 
 func _gear_label() -> String:
 	if gear_mode == "P":
@@ -236,8 +273,10 @@ func _toggle_pause() -> void:
 		camera_rig.snap()
 
 func _cycle_camera() -> void:
-	if is_instance_valid(camera_rig):
-		camera_rig.cycle_mode()
+	if not is_instance_valid(camera_rig):
+		return
+	camera_rig.cycle_mode()
+	_show_camera_hint("КАМЕРА: " + camera_rig.mode_name().to_upper())
 
 func _toggle_lights() -> void:
 	if not is_instance_valid(headlights):

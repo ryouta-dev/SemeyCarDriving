@@ -132,6 +132,11 @@ var _rim_mesh: CylinderMesh
 
 
 func _ready() -> void:
+	# The fleet is moved by hand in [method _process], not by the physics step,
+	# so 3D physics interpolation (SceneTreeFTI) must stay off for this subtree:
+	# it would hold the cars one physics tick back and fight the manual motion.
+	# Children inherit the OFF mode, so the whole traffic fleet follows.
+	physics_interpolation_mode = Node3D.PHYSICS_INTERPOLATION_MODE_OFF
 	_build_fleet()
 
 ## Number of traffic cars in the fleet (nine by design).

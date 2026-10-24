@@ -179,6 +179,10 @@ func _build_car() -> void:
 
 func _build_camera() -> void:
 	_camera = Camera3D.new()
+	# The menu camera orbits in [method _process], not in a physics step, so 3D
+	# physics interpolation must stay off for it; otherwise the orbit would be
+	# held one tick behind the rendered frame.
+	_camera.physics_interpolation_mode = Node3D.PHYSICS_INTERPOLATION_MODE_OFF
 	_camera.fov = 48.0
 	_camera.near = 0.05
 	_camera.far = 200.0
