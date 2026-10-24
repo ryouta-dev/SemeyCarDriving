@@ -54,35 +54,41 @@ func _ready() -> void:
 func _build_environment() -> void:
 	var sky_material := ShaderMaterial.new()
 	sky_material.shader = SKY_SHADER
-	sky_material.set_shader_parameter("zenith_color", Color("3c6f9e"))
-	sky_material.set_shader_parameter("horizon_color", Color("dfeaf3"))
-	sky_material.set_shader_parameter("ground_color", Color("3b424a"))
-	sky_material.set_shader_parameter("sun_color", Color("fff1dc"))
-	sky_material.set_shader_parameter("sun_size", 0.0012)
-	sky_material.set_shader_parameter("sun_glow", 0.45)
-	sky_material.set_shader_parameter("cloud_coverage", 0.34)
-	sky_material.set_shader_parameter("cloud_scale", 1.2)
-	sky_material.set_shader_parameter("cloud_opacity", 0.9)
+	sky_material.set_shader_parameter("zenith_color", Color("2f6396"))
+	sky_material.set_shader_parameter("horizon_color", Color("c8dcec"))
+	sky_material.set_shader_parameter("ground_color", Color("39424c"))
+	sky_material.set_shader_parameter("sun_color", Color("fff2da"))
+	sky_material.set_shader_parameter("sun_size", 0.0016)
+	sky_material.set_shader_parameter("sun_glow", 0.38)
+	sky_material.set_shader_parameter("cloud_coverage", 0.30)
+	sky_material.set_shader_parameter("cloud_scale", 1.3)
+	sky_material.set_shader_parameter("cloud_opacity", 0.85)
 	var sky := Sky.new()
 	sky.sky_material = sky_material
 	var environment := Environment.new()
 	environment.background_mode = Environment.BG_SKY
 	environment.sky = sky
 	environment.ambient_light_source = Environment.AMBIENT_SOURCE_SKY
-	environment.ambient_light_energy = 1.0
+	environment.ambient_light_energy = 0.55
 	environment.reflected_light_source = Environment.REFLECTION_SOURCE_SKY
 	environment.tonemap_mode = Environment.TONE_MAPPER_ACES
+	environment.tonemap_exposure = 0.92
 	environment.glow_enabled = true
-	environment.glow_intensity = 0.45
-	environment.glow_bloom = 0.05
+	environment.glow_intensity = 0.35
+	environment.glow_bloom = 0.03
 	environment.fog_enabled = true
-	environment.fog_light_color = Color("c7d7e5")
-	environment.fog_density = 0.0007
-	environment.fog_aerial_perspective = 0.2
-	environment.fog_sky_affect = 0.2
+	environment.fog_light_color = Color("b7cbdd")
+	environment.fog_density = 0.00032
+	environment.fog_aerial_perspective = 0.35
+	environment.fog_sky_affect = 0.12
+	environment.fog_sun_scatter = 0.25
 	environment.ssao_enabled = true
-	environment.ssao_intensity = 1.3
-	environment.ssao_radius = 1.2
+	environment.ssao_intensity = 1.6
+	environment.ssao_radius = 1.0
+	environment.adjustment_enabled = true
+	environment.adjustment_contrast = 1.08
+	environment.adjustment_saturation = 1.12
+	environment.adjustment_brightness = 1.0
 	var world_environment := WorldEnvironment.new()
 	world_environment.name = "WorldEnvironment"
 	world_environment.environment = environment
@@ -92,8 +98,8 @@ func _build_environment() -> void:
 	var sun := DirectionalLight3D.new()
 	sun.name = "Sun"
 	sun.rotation_degrees = Vector3(-38.0, -32.0, 0.0)
-	sun.light_color = Color("fff0dc")
-	sun.light_energy = 2.2
+	sun.light_color = Color("ffeccd")
+	sun.light_energy = 1.6
 	sun.shadow_enabled = true
 	sun.directional_shadow_mode = DirectionalLight3D.SHADOW_PARALLEL_4_SPLITS
 	sun.directional_shadow_max_distance = 600.0
@@ -105,10 +111,10 @@ func _build_environment() -> void:
 func _build_water_and_banks() -> void:
 	var water_material := ShaderMaterial.new()
 	water_material.shader = WATER_SHADER
-	water_material.set_shader_parameter("deep_color", Color("0b1f2a"))
-	water_material.set_shader_parameter("shallow_color", Color("17414c"))
-	water_material.set_shader_parameter("wave_height", 0.12)
-	water_material.set_shader_parameter("ripple_scale", 0.9)
+	water_material.set_shader_parameter("deep_color", Color("04141f"))
+	water_material.set_shader_parameter("shallow_color", Color("0e2f3d"))
+	water_material.set_shader_parameter("wave_height", 0.28)
+	water_material.set_shader_parameter("ripple_scale", 1.7)
 	var water_mesh := PlaneMesh.new()
 	water_mesh.size = Vector2(4000.0, 4000.0)
 	water_mesh.subdivide_width = 64
@@ -121,7 +127,9 @@ func _build_water_and_banks() -> void:
 	water.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
 	add_child(water)
 
-	var bank_material := _material(Color("6d7463"), 0.95, 0.0)
+	var bank_material := _material(Color("55683c"), 0.95, 0.0)
+	bank_material.albedo_texture = _noise_texture()
+	bank_material.uv1_scale = Vector3(90, 90, 1)
 	var concrete := _material(Color("b8b4ab"), 0.85, 0.0)
 	var asphalt := _material(Color("30343a"), 0.92, 0.0)
 	_bank(Vector3(0, -5, 230), Vector3(700, 10, 340), bank_material)
@@ -148,7 +156,9 @@ func _bank(center: Vector3, size: Vector3, material: Material) -> void:
 	body.add_child(collision)
 
 func _build_embankment() -> void:
-	var concrete := _material(Color("bcb7ad"), 0.82, 0.0)
+	var concrete := _material(Color("b3aea3"), 0.86, 0.0)
+	concrete.albedo_texture = _noise_texture()
+	concrete.uv1_scale = Vector3(26, 2, 1)
 	var dark := _material(Color("6f6a62"), 0.9, 0.0)
 	var paint := _material(Color("e9e5d8"), 0.7, 0.0)
 	# Promenade slab and edge parapet.
@@ -219,7 +229,9 @@ func _build_promenade_props() -> void:
 	root.name = "EmbankmentProps"
 	add_child(root)
 	var metal := _material(Color("2f3438"), 0.55, 0.6)
-	var concrete := _material(Color("bcb7ad"), 0.82, 0.0)
+	var concrete := _material(Color("aca79d"), 0.86, 0.0)
+	concrete.albedo_texture = _noise_texture()
+	concrete.uv1_scale = Vector3(8, 4, 1)
 	var rng := RandomNumberGenerator.new()
 	rng.seed = 20261024
 	var bins: Array[Transform3D] = []
@@ -237,6 +249,18 @@ func _build_promenade_props() -> void:
 	bush_mesh.radius = 1.0
 	bush_mesh.height = 1.8
 	_multimesh(root, bush_mesh, bushes, _material(Color("46613c"), 0.95, 0.0))
+	# Stones along the waterline, breaking up the straight revetment edge.
+	var rocks: Array[Transform3D] = []
+	for i in range(46):
+		var x: float = -205.0 + i * 9.0 + rng.randf_range(-2.0, 2.0)
+		var stone_scale: float = rng.randf_range(0.65, 1.5)
+		rocks.append(Transform3D(
+			Basis.from_scale(Vector3(1.7, 0.85, 1.1) * stone_scale),
+			Vector3(x, -7.5 + rng.randf_range(-0.3, 0.3), 57.0 + rng.randf_range(-0.9, 0.9))))
+	var rock_mesh := SphereMesh.new()
+	rock_mesh.radius = 1.0
+	rock_mesh.height = 1.3
+	_multimesh(root, rock_mesh, rocks, _material(Color("5b5750"), 0.95, 0.0))
 	# Stone revetment wall below the promenade, covering the raw bank face.
 	for span: Vector2 in _parapet_spans():
 		_box(root, Vector3(span.y - span.x, 8.6, 0.8), Vector3((span.x + span.y) * 0.5, -4.2, 58.2), concrete)
@@ -405,6 +429,22 @@ func _material(color: Color, roughness: float, metallic: float) -> StandardMater
 	material.roughness = roughness
 	material.metallic = metallic
 	return material
+
+## Soft grey-scale noise used as a cheap albedo break-up for grass and stone.
+func _noise_texture() -> NoiseTexture2D:
+	var noise := FastNoiseLite.new()
+	noise.frequency = 0.06
+	noise.fractal_octaves = 4
+	var ramp := Gradient.new()
+	ramp.set_color(0, Color(0.58, 0.58, 0.58))
+	ramp.set_color(1, Color(1, 1, 1))
+	var texture := NoiseTexture2D.new()
+	texture.width = 512
+	texture.height = 512
+	texture.seamless = true
+	texture.noise = noise
+	texture.color_ramp = ramp
+	return texture
 
 func _box(parent: Node, size: Vector3, position: Vector3, material: Material) -> MeshInstance3D:
 	var mesh := BoxMesh.new()

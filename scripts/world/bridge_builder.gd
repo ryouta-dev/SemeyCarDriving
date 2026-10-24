@@ -23,7 +23,7 @@ static func build(parent: Node3D) -> void:
 	var concrete := _mat(Color("d8d3ca"), 0.82, 0.02)
 	concrete.albedo_texture = _noise_texture()
 	concrete.uv1_scale = Vector3(3, 60, 1)
-	var asphalt := _mat(Color("3a3f46"), 0.92, 0.0)
+	var asphalt := _mat(Color("44494f"), 0.92, 0.0)
 	asphalt.albedo_texture = _noise_texture()
 	asphalt.uv1_scale = Vector3(6, 220, 1)
 	var metal := _mat(Color("c8ccd3"), 0.42, 0.80)
