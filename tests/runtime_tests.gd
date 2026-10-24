@@ -167,6 +167,23 @@ func _run() -> void:
 	_check(showcase_ready, "M1 showcase car activated")
 	_check(showcase.get_node_or_null("BridgeDeck") != null, "M1 bridge deck built")
 	_check(showcase.get_node_or_null("CameraRig") != null, "M1 camera rig exists")
+	# Free look: a mouse drag must swing the camera and release must spring it back.
+	var rig: VehicleCameraRig = showcase.camera_rig
+	var look_press := InputEventMouseButton.new()
+	look_press.button_index = MOUSE_BUTTON_RIGHT
+	look_press.pressed = true
+	Input.parse_input_event(look_press)
+	await process_frame
+	var look_drag := InputEventMouseMotion.new()
+	look_drag.relative = Vector2(180.0, 0.0)
+	Input.parse_input_event(look_drag)
+	await process_frame
+	_check(absf(rig._look_yaw) > 0.05, "M1 drag looks around")
+	var look_release := InputEventMouseButton.new()
+	look_release.button_index = MOUSE_BUTTON_RIGHT
+	look_release.pressed = false
+	Input.parse_input_event(look_release)
+	await process_frame
 	_check(showcase.hud != null and is_instance_valid(showcase.hud._speedometer), "M1 HUD built")
 	_check(showcase.get_node_or_null("KmPosts") != null, "M1 bridge kilometre posts")
 	_check(showcase.get_node_or_null("TowerDetails") != null, "M1 bridge tower details")

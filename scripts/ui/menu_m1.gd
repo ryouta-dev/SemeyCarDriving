@@ -11,6 +11,8 @@ var _car: Vehicle
 var _angle := 0.85
 var _toast: Label
 var _toast_tween: Tween
+var _ui_root: Control
+var _loading := false
 
 func _ready() -> void:
 	_build_environment()
@@ -201,6 +203,7 @@ func _build_ui() -> void:
 	root.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
 	root.mouse_filter = Control.MOUSE_FILTER_IGNORE
 	layer.add_child(root)
+	_ui_root = root
 
 	var title := Label.new()
 	title.text = "SEMEY"
@@ -255,7 +258,28 @@ func _menu_button(text: String, accent: bool, action: Callable) -> Button:
 	button.pressed.connect(action)
 	return button
 
+## The showcase builds its whole world in `_ready`, so the first frame of the new
+## scene can hitch for a second while geometry and shaders compile. Painting a
+## loading card for two frames before the switch keeps that hitch from looking
+## like a frozen black window.
 func _play() -> void:
+	if _loading:
+		return
+	_loading = true
+	var card := ColorRect.new()
+	card.name = "LoadingCard"
+	card.color = Color("0b0d10")
+	card.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	_ui_root.add_child(card)
+	var label := Label.new()
+	label.text = "ЗАГРУЗКА..."
+	ThemeM1.apply_label(label, 34, ThemeM1.ACCENT)
+	label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	label.vertical_alignment = VERTICAL_ALIGNMENT_CENTER
+	label.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	card.add_child(label)
+	await get_tree().process_frame
+	await get_tree().process_frame
 	get_tree().change_scene_to_file(SHOWCASE_SCENE)
 
 func _show_toast(text: String) -> void:
