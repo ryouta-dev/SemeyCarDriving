@@ -67,24 +67,31 @@ const PALETTE: Array[String] = [
 	"c16a2d", # orange
 ]
 
-## Car proportions in metres. The model is authored facing -Z: headlights sit at
-## the front (-Z), tail lights at the rear (+Z). The model origin is on the
-## ground, wheels included, so the car node only has to be lifted to [constant
-## ROAD_Y].
-const BODY_SIZE := Vector3(1.8, 0.62, 4.4)
-const BODY_Y := 0.61
-const BODY_HALF_LENGTH := 2.2
-const CABIN_SIZE := Vector3(1.55, 0.52, 2.0)
-const CABIN_Y := 1.16
-const CABIN_Z := 0.15
+## Body styles cycled by spawn index so the fleet does not read as nine copies of
+## one box: a sedan, a short hatchback and a tall wagon. Lengths are metres along
+## Z, `cabin_z` shifts the glasshouse towards the rear, `glass_h` its height.
+const STYLES: Array[Dictionary] = [
+	{"length": 4.5, "cabin": 2.05, "cabin_z": 0.10, "glass_h": 0.42},
+	{"length": 4.0, "cabin": 1.70, "cabin_z": 0.45, "glass_h": 0.40},
+	{"length": 4.6, "cabin": 2.35, "cabin_z": 0.05, "glass_h": 0.60},
+]
+
+## Wheel geometry shared by every style. The model is authored facing -Z:
+## headlights sit at the front (-Z), tail lights at the rear (+Z). The model
+## origin is on the ground, wheels included, so the car node only has to be
+## lifted to [constant ROAD_Y].
 const WHEEL_RADIUS := 0.34
 const WHEEL_WIDTH := 0.24
-const WHEEL_X := 0.88
-const WHEEL_Z := 1.42
-const LIGHT_SIZE := Vector3(0.34, 0.12, 0.06)
-const LIGHT_X := 0.62
-const TAIL_Y := 0.80
-const HEAD_Y := 0.68
+const WHEEL_X := 0.80
+const WHEEL_Z := 1.36
+
+## Height of the body sections and the lamp rows.
+const BODY_SILL_Y := 0.52
+const BODY_SHOULDER_Y := 0.86
+const TAIL_Y := 0.84
+const HEAD_Y := 0.76
+const LIGHT_SIZE := Vector3(0.36, 0.12, 0.06)
+const LIGHT_X := 0.60
 
 ## One traffic car: a plain [Node3D] plus its cruise state. No physics body and
 ## no collision — the deck is flat, so Z-only motion is enough.
@@ -116,9 +123,12 @@ var _cars: Array[TrafficCar] = []
 ## Geometry and material resources shared by the whole fleet (built once).
 var _tire_material: StandardMaterial3D
 var _glass_material: StandardMaterial3D
+var _trim_material: StandardMaterial3D
 var _tail_material: StandardMaterial3D
 var _head_material: StandardMaterial3D
+var _rim_material: StandardMaterial3D
 var _wheel_mesh: CylinderMesh
+var _rim_mesh: CylinderMesh
 
 
 func _ready() -> void:
@@ -140,6 +150,7 @@ func _build_fleet() -> void:
 	add_child(_cars_root)
 	_shared_materials()
 	_wheel_mesh = _build_wheel_mesh()
+	_rim_mesh = _build_rim_mesh()
 	var rng := RandomNumberGenerator.new()
 	rng.seed = SEED
 	for lane_index in range(LANES.size()):
@@ -166,21 +177,42 @@ func _spawn_car(lane_x: float, z: float, speed: float, direction: float) -> void
 	# The model faces -Z, so +Z traffic is yawed 180°.
 	car.rotation.y = 0.0 if direction < 0.0 else PI
 	_cars_root.add_child(car)
-	_add_box(car, "Body", BODY_SIZE, Vector3(0.0, BODY_Y, 0.0), _body_material(car_index))
-	_add_box(car, "Cabin", CABIN_SIZE, Vector3(0.0, CABIN_Y, CABIN_Z), _glass_material)
+	var style: Dictionary = STYLES[car_index % STYLES.size()]
+	var length: float = style["length"]
+	var cabin: float = style["cabin"]
+	var cabin_z: float = style["cabin_z"]
+	var glass_h: float = style["glass_h"]
+	var half_length: float = length * 0.5
+	var paint := _body_material(car_index)
+	# Sills, tapered shoulder, glasshouse and a thin painted roof.
+	_add_box(car, "Body", Vector3(1.82, 0.46, length), Vector3(0.0, BODY_SILL_Y, 0.0), paint)
+	_add_box(car, "Shoulder", Vector3(1.72, 0.30, length * 0.96), Vector3(0.0, BODY_SHOULDER_Y, 0.0), paint)
+	var cabin_y: float = BODY_SHOULDER_Y + glass_h * 0.5 + 0.06
+	_add_box(car, "Cabin", Vector3(1.52, glass_h, cabin), Vector3(0.0, cabin_y, cabin_z), _glass_material)
+	_add_box(car, "Roof", Vector3(1.46, 0.07, cabin * 0.9), Vector3(0.0, cabin_y + glass_h * 0.5 + 0.035, cabin_z), paint)
+	# Dark bumpers front and rear.
+	for bumper_z: float in [-half_length - 0.05, half_length + 0.05]:
+		_add_box(car, "Bumper", Vector3(1.86, 0.26, 0.16), Vector3(0.0, BODY_SILL_Y, bumper_z), _trim_material)
 	# Four wheels as one MultiMesh: visually four cylinders, one draw call.
 	var wheels := MultiMeshInstance3D.new()
 	wheels.name = "Wheels"
-	wheels.multimesh = _build_wheel_multimesh()
+	wheels.multimesh = _build_wheel_multimesh(_wheel_mesh)
 	wheels.material_override = _tire_material
 	# The wheel transforms are tiny; give the instance a car-sized AABB so it is
 	# not culled by an empty or oversized bound.
-	wheels.custom_aabb = AABB(Vector3(-1.2, 0.0, -1.9), Vector3(2.4, 0.8, 3.8))
+	wheels.custom_aabb = AABB(Vector3(-1.2, 0.0, -half_length), Vector3(2.4, 0.8, length))
 	car.add_child(wheels)
+	# Light rims on the same transforms so the wheels do not read as black blobs.
+	var rims := MultiMeshInstance3D.new()
+	rims.name = "Rims"
+	rims.multimesh = _build_wheel_multimesh(_rim_mesh)
+	rims.material_override = _rim_material
+	rims.custom_aabb = wheels.custom_aabb
+	car.add_child(rims)
 	for side: float in [-1.0, 1.0]:
 		var suffix := "L" if side < 0.0 else "R"
-		_add_box(car, "TailLight_" + suffix, LIGHT_SIZE, Vector3(side * LIGHT_X, TAIL_Y, BODY_HALF_LENGTH + 0.03), _tail_material)
-		_add_box(car, "HeadLight_" + suffix, LIGHT_SIZE, Vector3(side * LIGHT_X, HEAD_Y, -BODY_HALF_LENGTH - 0.03), _head_material)
+		_add_box(car, "TailLight_" + suffix, LIGHT_SIZE, Vector3(side * LIGHT_X, TAIL_Y, half_length + 0.07), _tail_material)
+		_add_box(car, "HeadLight_" + suffix, LIGHT_SIZE, Vector3(side * LIGHT_X, HEAD_Y, -half_length - 0.07), _head_material)
 	_cars.append(car)
 
 # ── Shared resources ─────────────────────────────────────────────────────────
@@ -193,6 +225,13 @@ func _shared_materials() -> void:
 	_glass_material.albedo_color = Color("1c2732")
 	_glass_material.roughness = 0.12
 	_glass_material.metallic = 0.55
+	_trim_material = StandardMaterial3D.new()
+	_trim_material.albedo_color = Color("23262a")
+	_trim_material.roughness = 0.85
+	_rim_material = StandardMaterial3D.new()
+	_rim_material.albedo_color = Color("cdd0d5")
+	_rim_material.roughness = 0.5
+	_rim_material.metallic = 0.25
 	# Rear lamps glow red, front lamps warm white: enough to read the fleet at
 	# distance without adding any dynamic lights to the scene.
 	_tail_material = _emissive_material(Color("4a0f12"), Color("ff2418"), 3.2)
@@ -223,10 +262,19 @@ func _build_wheel_mesh() -> CylinderMesh:
 	mesh.rings = 1
 	return mesh
 
-func _build_wheel_multimesh() -> MultiMesh:
+func _build_rim_mesh() -> CylinderMesh:
+	var mesh := CylinderMesh.new()
+	mesh.top_radius = 0.185
+	mesh.bottom_radius = 0.185
+	mesh.height = WHEEL_WIDTH + 0.03
+	mesh.radial_segments = 10
+	mesh.rings = 1
+	return mesh
+
+func _build_wheel_multimesh(mesh: Mesh) -> MultiMesh:
 	var multimesh := MultiMesh.new()
 	multimesh.transform_format = MultiMesh.TRANSFORM_3D
-	multimesh.mesh = _wheel_mesh
+	multimesh.mesh = mesh
 	multimesh.instance_count = 4
 	# A cylinder stands on +Y by default; 90° around Z lays its axle along X so
 	# the wheel can roll along the bridge. All four wheels share this basis.

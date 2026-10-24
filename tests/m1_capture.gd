@@ -42,6 +42,20 @@ func _run() -> void:
 	car_view.current = true
 	await _wait(20)
 	_capture("car.png")
+	# Fifth shot: a traffic car from the side, frozen so it stays in frame.
+	var traffic_cars := zone.get_node_or_null("Traffic/Cars")
+	if traffic_cars != null and traffic_cars.get_child_count() > 0:
+		zone.get_node("Traffic").set_process(false)
+		var sample := traffic_cars.get_child(0) as Node3D
+		var spot: Vector3 = sample.global_position
+		var traffic_view := Camera3D.new()
+		traffic_view.fov = 40.0
+		root.add_child(traffic_view)
+		traffic_view.position = spot + Vector3(6.5, 2.0, -3.4)
+		traffic_view.look_at(spot + Vector3(0.0, 0.7, 0.0))
+		traffic_view.current = true
+		await _wait(16)
+		_capture("traffic.png")
 	zone.queue_free()
 	await _wait(5)
 	quit()
